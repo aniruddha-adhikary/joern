@@ -19,4 +19,7 @@ object ArlOperators {
 
   /** `[0,1]` / `]a,b[` — ARL interval literal. */
   val interval = "<operator>.interval"
+
+  /** `select (T r) { ... }` on a ruletask — dynamic rule filter over the candidate rules (its arguments). */
+  val dynamicSelect = "<operator>.dynamicSelect"
 }
