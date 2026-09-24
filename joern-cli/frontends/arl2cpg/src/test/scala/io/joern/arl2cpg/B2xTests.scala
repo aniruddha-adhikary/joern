@@ -129,6 +129,30 @@ class B2xTests extends AnyWordSpec with Matchers with BeforeAndAfterAll {
       writers(withB2x, "outcome.archived") shouldBe empty
       mayAffectReasons(withB2x, "archive") shouldBe Set(Reasons.NoB2xBodyForMethod)
     }
+
+    "see through a cast on the receiver" in {
+      val dir = Files.createTempDirectory("arl2cpg-b2x-cast")
+      tmpDirs ::= dir
+      Files.writeString(
+        dir.resolve("cast.arl"),
+        """public signature LoanValidation extends ilog.rules.engine.IlrSignature {
+          |    public out com.acme.loan.model.Outcome outcome = null;
+          |}
+          |ruleset LoanValidation (LoanValidation) {
+          |  rule Cast {
+          |    when {} then { ((com.acme.loan.model.Outcome) outcome).report(); }
+          |  }
+          |}
+          |""".stripMargin
+      )
+      val cpg = new Arl2Cpg().createCpg(Config().withInputPath(dir.toString).withB2xPath(loanB2x.toString)).get
+      try {
+        val report = cpg.call.nameExact("report").l
+        report.size shouldBe 1
+        tags(report.head, ArlTags.WritesInferred) shouldBe Set("(com.acme.loan.model.Outcome) outcome.reported")
+        tags(report.head, ArlTags.MayAffect) shouldBe empty
+      } finally cpg.close()
+    }
   }
 
   "without the mapping" should {
