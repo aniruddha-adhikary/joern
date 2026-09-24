@@ -244,6 +244,7 @@ trait AstForFlow {
     val selSig  = s"boolean($varType)"
     val selFull = s"$containerFullName.$selName:$selSig"
 
+    val outerThis = thisParam
     valueScope.push(mutable.Map.empty)
     val varParam =
       parameterInNode(ctx, varName, varName, 1, isVariadic = false, EvaluationStrategies.BY_REFERENCE, varType)
@@ -253,6 +254,7 @@ trait AstForFlow {
     val body   = blockAst(blockNode(ctx), blockChildrenAsts(ctx.block()))
     val selAst = methodAst(method, params, body, methodReturnNode(ctx, "boolean"))
     valueScope.pop()
+    thisParam = outerThis
     val ref = Ast(methodRefNode(ctx, code(ctx), selFull, s"$selName:$selSig"))
     SelectLowered(Option(ref), Option(selAst))
   }
