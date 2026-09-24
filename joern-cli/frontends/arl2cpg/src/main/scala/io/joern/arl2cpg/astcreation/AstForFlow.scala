@@ -181,7 +181,8 @@ trait AstForFlow {
     }
 
     // rules: <selector>; — one STATIC call per matching rule of the same file.
-    val selectorText = Option(ctx.ruleSelector()).map(_.getText).getOrElse("")
+    // `code()` slices the original file content so whitespace inside names is preserved.
+    val selectorText = Option(ctx.ruleSelector()).map(code).getOrElse("")
     val entries      = selectorText.split(',').toList.map(_.trim).filter(_.nonEmpty)
     val matchedRules = entries.flatMap(selectorMatchingRules)
     val ruleCallAsts = matchedRules.map { ruleName =>
@@ -247,12 +248,18 @@ trait AstForFlow {
     SelectLowered(Option(ref), Option(selAst))
   }
 
-  /** Selector entries: `pkg.rule` exact, `pkg.*` prefix, `*` all. */
-  private def selectorMatchingRules(entry: String): List[String] = entry match {
-    case "*"                             => allRuleNames
-    case prefix if prefix.endsWith(".*") =>
-      allRuleNames.filter(_.startsWith(prefix.stripSuffix(".*") + "."))
-    case exact => allRuleNames.filter(_ == exact)
+  /** Selector entries: `pkg.rule` exact, `pkg.*` prefix, `*` all. Whitespace runs are normalized — compiled selectors
+    * may pad names differently than the rule declarations (`GBP D_01` ≡ `GBP D_01`).
+    */
+  private def selectorMatchingRules(entry: String): List[String] = {
+    val normalized = entry.replaceAll("\\s+", " ").trim
+    normalized match {
+      case "*"                             => allRuleNames
+      case prefix if prefix.endsWith(".*") =>
+        val stem = prefix.stripSuffix(".*") + "."
+        allRuleNames.filter(rule => rule.replaceAll("\\s+", " ").startsWith(stem))
+      case exact => allRuleNames.filter(rule => rule.replaceAll("\\s+", " ") == exact)
+    }
   }
 
   // ------------------------------------------------------------------

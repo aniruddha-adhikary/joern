@@ -47,6 +47,49 @@ ruletask `body>select_rules` (ctx) {
     }
   }
 
+  "rules selectors containing spaces" should {
+
+    val spacedArl = """ruleset R (S){
+        |  rule `GBP D_01` { then { } }
+        |  rule `GBP D_02` { then { } }
+        |  rule `other.x` { then { } }
+        |}
+        |ruletask exact_sel (c) { rules : GBP D_01; }
+        |ruletask pair_sel (c) { rules : GBP D_01, other.x; }
+        |ruletask prefix_sel (c) { rules : other.*; }
+        |""".stripMargin
+
+    "preserve whitespace inside rule names (exact selector)" in {
+      val cpg   = code(spacedArl)
+      val calls = cpg.method.name("exact_sel").call.name("GBP D_01").l
+      calls.size shouldBe 1
+      calls.head.methodFullName shouldBe "R.GBP D_01:void()"
+    }
+
+    "match a comma-separated selector list" in {
+      val cpg = code(spacedArl)
+      cpg.method.name("pair_sel").call.methodFullName.l.toSet shouldBe
+        Set("R.GBP D_01:void()", "R.other.x:void()")
+    }
+
+    "still match a prefix selector" in {
+      val cpg = code(spacedArl)
+      cpg.method.name("prefix_sel").call.methodFullName.l shouldBe List("R.other.x:void()")
+    }
+
+    "emit a call to the spaced rule from both ruletasks" in {
+      val cpg = code(spacedArl)
+      cpg.call.methodFullNameExact("R.GBP D_01:void()").size shouldBe 2
+    }
+
+    "preserve the space in the rules annotation code" in {
+      val cpg   = code(spacedArl)
+      val codes = cpg.method.name("exact_sel").annotation.name("rules").code.l
+      codes.size shouldBe 1
+      codes.head should include("GBP D_01")
+    }
+  }
+
   "ruletask rules selector" should {
     "emit one call per matching rule" in {
       val cpg      = code(arl)
