@@ -2,6 +2,7 @@ package io.joern.arl2cpg.astcreation
 
 import io.joern.arl2cpg.ArlOperators
 import io.joern.arl2cpg.parser.ARLParser
+import io.joern.arl2cpg.rfl.RuleflowMeta
 import io.joern.x2cpg.{Ast, Defines}
 import io.shiftleft.codepropertygraph.generated.nodes.*
 import io.shiftleft.codepropertygraph.generated.{
@@ -45,19 +46,40 @@ trait AstForFlow {
     declareValue(paramName, Defines.Any, paramNode)
     val params   = Seq(thisParamAst(ctx), Ast(paramNode))
     val taskName = nameOf(ctx.flowId(1)) // 'maintask' flowId is the second flowId
-    val call     = callNode(
+    // A ruleflow is scoped by name: unique rfl carrying `<name>X</name>`.
+    val scope = rflMeta.filter(meta => meta.name == name) match {
+      case List(one) => Option(one)
+      case _         => None
+    }
+    val prevScope = currentTaskScope
+    currentTaskScope = scope
+    val call = callNode(
       ctx,
       taskName,
       taskName,
-      s"$containerFullName.$taskName:void()",
+      resolvedCallFullName(taskName),
       DispatchTypes.STATIC_DISPATCH,
       Option("void()"),
       Option("void")
     )
     val body = blockAst(blockNode(ctx), List(callAst(call, List.empty)))
-    val ast  = methodAst(method, params, body, methodReturnNode(ctx, "void"))
+    val ast  = methodAstWithAnnotations(
+      method,
+      params,
+      body,
+      methodReturnNode(ctx, "void"),
+      annotations = scope.toList.flatMap(meta =>
+        List(valueAnnotationAst(ctx, "ruleflowUuid", meta.uuid), valueAnnotationAst(ctx, "ruleflowName", meta.name))
+      ) ++ List(valueAnnotationAst(ctx, "ruleflowScope", ruleflowScopeState(name)))
+    )
+    currentTaskScope = prevScope
     valueScope.pop()
     ast
+  }
+
+  private def ruleflowScopeState(name: String): String = {
+    val matches = rflMeta.count(meta => meta.name == name)
+    if (matches == 1) "resolved" else if (matches > 1) "ambiguous" else "unknown"
   }
 
   protected def astForFlowElement(ctx: ARLParser.FlowElementContext): List[Ast] = {
@@ -73,13 +95,14 @@ trait AstForFlow {
     ctx: ParserRuleContext,
     taskName: String,
     signature: String = "void()",
-    fullNameSuffix: String = "void()"
+    fullNameSuffix: String = "void()",
+    uuidSuffix: String = ""
   ): NewMethod =
     methodNode(
       ctx,
       taskName,
       code(ctx),
-      s"$containerFullName.$taskName:$fullNameSuffix",
+      s"$containerFullName.$taskName$uuidSuffix:$fullNameSuffix",
       Option(signature),
       parseResult.filename,
       astParentType = Option(NodeTypes.TYPE_DECL),
@@ -90,7 +113,10 @@ trait AstForFlow {
   private def astForFlowtask(ctx: ARLParser.FlowtaskDeclContext): Ast = {
     val name = nameOf(ctx.flowId())
     valueScope.push(mutable.Map.empty)
-    val method    = flowMethodNode(ctx, name)
+    val scope     = taskScopeFor(name, callTaskIds(ctx))
+    val prevScope = currentTaskScope
+    currentTaskScope = scope
+    val method    = flowMethodNode(ctx, name, uuidSuffix = scopedSuffix(name, scope))
     val thisAst   = thisParamAst(ctx)
     val paramName = ctx.dollarRef().getText
     val paramNode =
@@ -102,7 +128,14 @@ trait AstForFlow {
         Option(ctx.flowSeq()).toList.flatMap(astForFlowSeqStatements) ++
         Option(ctx.finalBlock()).toList.flatMap(blk => blockChildrenAsts(blk.block()))
     val body = blockAst(blockNode(ctx), bodyStmts)
-    val ast  = methodAst(method, params, body, methodReturnNode(ctx, "void"))
+    val ast  = methodAstWithAnnotations(
+      method,
+      params,
+      body,
+      methodReturnNode(ctx, "void"),
+      annotations = scopeAnnotationAsts(ctx, name, scope)
+    )
+    currentTaskScope = prevScope
     valueScope.pop()
     ast
   }
@@ -111,7 +144,10 @@ trait AstForFlow {
   private def astForFunctiontask(ctx: ARLParser.FunctiontaskDeclContext): Ast = {
     val name = nameOf(ctx.flowId())
     valueScope.push(mutable.Map.empty)
-    val method  = flowMethodNode(ctx, name)
+    val scope     = taskScopeFor(name, callTaskIds(ctx))
+    val prevScope = currentTaskScope
+    currentTaskScope = scope
+    val method  = flowMethodNode(ctx, name, uuidSuffix = scopedSuffix(name, scope))
     val thisAst = thisParamAst(ctx)
     val params  = Option(ctx.dollarRef()).map { dollar =>
       val paramName = dollar.getText
@@ -132,7 +168,14 @@ trait AstForFlow {
         ctx.statement().asScala.toList.flatMap(astsForStatement) ++
         Option(ctx.finalBlock()).toList.flatMap(blk => blockChildrenAsts(blk.block()))
     val body = blockAst(blockNode(ctx), bodyStmts)
-    val ast  = methodAst(method, thisAst +: params, body, methodReturnNode(ctx, "void"))
+    val ast  = methodAstWithAnnotations(
+      method,
+      thisAst +: params,
+      body,
+      methodReturnNode(ctx, "void"),
+      annotations = scopeAnnotationAsts(ctx, name, scope)
+    )
+    currentTaskScope = prevScope
     valueScope.pop()
     ast
   }
@@ -140,11 +183,60 @@ trait AstForFlow {
   private def blockChildrenAsts(ctx: ARLParser.BlockContext): List[Ast] =
     withBlockScope(ctx.statement().asScala.toList.flatMap(astsForStatement))
 
+  // ------------------------------------------------------------------
+  // .rfl scoping — disambiguate same-named tasks via ruleflow metadata
+  // ------------------------------------------------------------------
+
+  /** The task identifier of a (possibly `flow>`-qualified) task name: its last `>` segment. */
+  private def taskIdOf(name: String): String = name.split('>').last.trim
+
+  /** All `call task:` target ids referenced anywhere inside a declaration subtree. */
+  private def callTaskIds(ctx: ParserRuleContext): Set[String] =
+    childrenOf(ctx).flatMap {
+      case callCtx: ARLParser.CallTaskContext => List(taskIdOf(taskRefName(callCtx.taskRef())))
+      case _: TerminalNode                    => List.empty
+      case child: ParserRuleContext           => callTaskIds(child).toList
+      case _                                  => List.empty
+    }.toSet
+
+  /** Scope candidates for a task declaration: ruleflows whose task list contains its id (or full name), refined to
+    * those that also contain every `call task` target referenced in its body. Unique → scoped.
+    */
+  private def taskScopeFor(name: String, calledIds: Set[String]): Option[RuleflowMeta] = {
+    val id      = taskIdOf(name)
+    val byId    = rflMeta.filter(meta => meta.taskIds.contains(id) || meta.taskIds.contains(name))
+    val refined = if (calledIds.isEmpty) byId else byId.filter(meta => calledIds.forall(meta.taskIds.contains))
+    if (refined.size == 1) Option(refined.head) else None
+  }
+
+  /** `@uuid` suffix applied to the fullName of a scoped duplicate task name; empty otherwise. */
+  private def scopedSuffix(name: String, scope: Option[RuleflowMeta]): String =
+    scope.filter(_ => duplicateTaskNames.contains(name)).map(meta => s"@${meta.uuid}").getOrElse("")
+
+  private def scopeState(name: String, scope: Option[RuleflowMeta]): String =
+    if (scope.isDefined) "resolved"
+    else if (duplicateTaskNames.contains(name) && rflMeta.nonEmpty) "ambiguous"
+    else "unknown"
+
+  private def valueAnnotationAst(ctx: ParserRuleContext, annoName: String, value: String): Ast = {
+    val assign = annotationAssignmentAst("value", value, Ast(annotationLiteralNode(ctx, value)))
+    annotationAst(annotationNode(ctx, s"$annoName: $value", annoName, annoName), List(assign))
+  }
+
+  /** `ruleflowUuid`/`ruleflowName`/`ruleflowScope` annotations for a task or ruleflow method. */
+  private def scopeAnnotationAsts(ctx: ParserRuleContext, name: String, scope: Option[RuleflowMeta]): List[Ast] =
+    scope.toList.flatMap(meta =>
+      List(valueAnnotationAst(ctx, "ruleflowUuid", meta.uuid), valueAnnotationAst(ctx, "ruleflowName", meta.name))
+    ) ++ List(valueAnnotationAst(ctx, "ruleflowScope", scopeState(name, scope)))
+
   /** `ruletask name(id) { initial? props* rules: sel; select? final? }`. */
   private def astForRuletask(ctx: ARLParser.RuletaskDeclContext): Ast = {
     val name = nameOf(ctx.flowId())
     valueScope.push(mutable.Map.empty)
-    val method    = flowMethodNode(ctx, name)
+    val scope     = taskScopeFor(name, callTaskIds(ctx))
+    val prevScope = currentTaskScope
+    currentTaskScope = scope
+    val method    = flowMethodNode(ctx, name, uuidSuffix = scopedSuffix(name, scope))
     val thisAst   = thisParamAst(ctx)
     val paramName = Option(ctx.Identifier()).map(_.getText)
     val params    = paramName.map { param =>
@@ -225,9 +317,10 @@ trait AstForFlow {
       thisAst +: params,
       body,
       methodReturnNode(ctx, "void"),
-      annotations = propAnnotations :+ rulesAnnotation :+ selectionAnnotation
+      annotations = (propAnnotations :+ rulesAnnotation :+ selectionAnnotation) ++ scopeAnnotationAsts(ctx, name, scope)
     )
     valueScope.pop()
+    currentTaskScope = prevScope
     ast.withChildren(selectAsts.flatMap(_.nestedMethod).toList)
   }
 
@@ -242,7 +335,7 @@ trait AstForFlow {
     val varType = typeFullName(ctx.`type`())
     val selName = s"$taskName$$select"
     val selSig  = s"boolean($varType)"
-    val selFull = s"$containerFullName.$selName:$selSig"
+    val selFull = s"$containerFullName.$selName${scopedSuffix(taskName, currentTaskScope)}:$selSig"
 
     val outerThis = thisParam
     valueScope.push(mutable.Map.empty)
@@ -294,9 +387,24 @@ trait AstForFlow {
 
   /** `call task: flow > task;` → CALL to the full `flow>task` name, whitespace preserved per part. */
   private def astForCallTask(ctx: ARLParser.CallTaskContext): Ast = {
-    // taskNamePart is `taskWord+`, so getText would collapse internal whitespace
-    // (`probe subflow` → `probesubflow`); slice the original text from the char stream.
-    val parts = ctx.taskRef().taskNamePart().asScala.toList.map { part =>
+    val taskName = taskRefName(ctx.taskRef())
+    val call     = callNode(
+      ctx,
+      code(ctx),
+      taskName,
+      resolvedCallFullName(taskName),
+      DispatchTypes.STATIC_DISPATCH,
+      Option("void()"),
+      Option("void")
+    )
+    callAst(call, List.empty)
+  }
+
+  /** Full `flow>task` ref text; `taskNamePart` is `taskWord+`, so getText would collapse internal whitespace (`probe
+    * subflow` → `probesubflow`) — slice the original text from the char stream.
+    */
+  private def taskRefName(taskRef: ARLParser.TaskRefContext): String = {
+    val parts = taskRef.taskNamePart().asScala.toList.map { part =>
       Option(part.getStart)
         .flatMap(start => Option(start.getInputStream))
         .map(input =>
@@ -306,17 +414,29 @@ trait AstForFlow {
         )
         .getOrElse(part.getText.trim)
     }
-    val taskName = if (parts.nonEmpty) parts.mkString(">") else ctx.taskRef().getText.trim
-    val call     = callNode(
-      ctx,
-      code(ctx),
-      taskName,
-      s"$containerFullName.$taskName:void()",
-      DispatchTypes.STATIC_DISPATCH,
-      Option("void()"),
-      Option("void")
-    )
-    callAst(call, List.empty)
+    if (parts.nonEmpty) parts.mkString(">") else taskRef.getText.trim
+  }
+
+  /** `call task` target fullName: a duplicated target is suffixed with the caller's scope uuid when the scope's task
+    * list contains it, or with a referenced subflow's uuid when the target lives there. Otherwise the plain unscoped
+    * name (deliberately unresolved rather than guessed).
+    */
+  private def resolvedCallFullName(taskName: String): String = {
+    val uuidSuffix = currentTaskScope match {
+      case Some(scope) if duplicateTaskNames.contains(taskName) =>
+        val id = taskIdOf(taskName)
+        if (scope.taskIds.contains(id) || scope.taskIds.contains(taskName)) {
+          s"@${scope.uuid}"
+        } else {
+          scope.subflowTargets.values.toList
+            .flatMap(targetUuid => rflMeta.find(meta => meta.uuid == targetUuid))
+            .find(meta => meta.taskIds.contains(id) || meta.taskIds.contains(taskName))
+            .map(meta => s"@${meta.uuid}")
+            .getOrElse("")
+        }
+      case _ => ""
+    }
+    s"$containerFullName.$taskName$uuidSuffix:void()"
   }
 
   private def astForFlowIf(ctx: ARLParser.FlowIfContext): Ast = {
