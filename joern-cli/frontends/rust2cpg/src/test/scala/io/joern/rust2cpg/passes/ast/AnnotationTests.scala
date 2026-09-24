@@ -289,7 +289,7 @@ class AnnotationTests extends Rust2CpgSuite(noSysRoot = true) {
         |""".stripMargin)
 
     "have correct annotation" in {
-      inside(cpg.typeDecl.nameExact("Foo").member.nameExact("A").annotation.l) { case attr :: Nil =>
+      inside(cpg.typeDecl.fullNameExact("rust2cpgtest::Foo::A").annotation.l) { case attr :: Nil =>
         attr.name shouldBe "default"
         attr.fullName shouldBe "default"
         attr.code shouldBe "#[default]"
@@ -327,6 +327,37 @@ class AnnotationTests extends Rust2CpgSuite(noSysRoot = true) {
         attr.name shouldBe "doc"
         attr.fullName shouldBe "doc"
         attr.code shouldBe "#[doc(hidden)]"
+      }
+    }
+  }
+
+  "record field with attribute" should {
+    val cpg = code("""
+        |struct Foo {
+        |  #[serde(rename = "id")]
+        |  x: i32
+        |}
+        |""".stripMargin)
+
+    "have correct annotation" in {
+      inside(cpg.typeDecl.nameExact("Foo").member.nameExact("x").annotation.l) { case attr :: Nil =>
+        attr.name shouldBe "serde"
+        attr.fullName shouldBe "serde"
+        attr.code shouldBe """#[serde(rename = "id")]"""
+      }
+    }
+  }
+
+  "tuple field with attribute" should {
+    val cpg = code("""
+        |struct Foo(#[serde(skip)] i32);
+        |""".stripMargin)
+
+    "have correct annotation" in {
+      inside(cpg.typeDecl.nameExact("Foo").member.nameExact("0").annotation.l) { case attr :: Nil =>
+        attr.name shouldBe "serde"
+        attr.fullName shouldBe "serde"
+        attr.code shouldBe "#[serde(skip)]"
       }
     }
   }
