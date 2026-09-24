@@ -138,6 +138,14 @@ ruleset IlrContext (EngineDataClass){
     }
   }
 
+  "a syntactically broken rule" should {
+
+    "still produce a CPG containing the rule METHOD" in {
+      val cpg = code("package x.y; rule Broken { when {} then { insert x } }")
+      cpg.method.name("Broken").headOption should not be empty
+    }
+  }
+
   "match many" should {
 
     "produce one IF per case plus a negated default IF" in {

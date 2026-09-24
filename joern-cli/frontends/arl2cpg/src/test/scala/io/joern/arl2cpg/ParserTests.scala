@@ -64,6 +64,13 @@ class ParserTests extends AnyWordSpec with Matchers {
           |""".stripMargin) shouldBe true
     }
 
+    "report exactly 1 syntax error for a missing ';' and still produce a unit" in {
+      val result = ArlParserFacade.parse(writeTmpArl("package x.y; rule Broken { when {} then { insert x } }").toString)
+      result.isSuccess shouldBe true
+      result.get.errorCount shouldBe 1
+      result.get.compilationUnit should not be null
+    }
+
     "parse ',' and 'as' inside a taskNamePart" in {
       parsesCleanly("""ruleset R (S){ rule `r` { then { } } }
           |flowtask body ($p) {
