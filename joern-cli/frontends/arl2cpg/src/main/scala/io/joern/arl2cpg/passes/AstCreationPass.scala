@@ -3,6 +3,7 @@ package io.joern.arl2cpg.passes
 import io.joern.arl2cpg.Config
 import io.joern.arl2cpg.astcreation.AstCreator
 import io.joern.arl2cpg.parser.ArlParserFacade
+import io.joern.arl2cpg.rfl.RflMetadata
 import io.joern.x2cpg.{SourceFiles, ValidationMode}
 import io.joern.x2cpg.frontendspecific.arl2cpg.FileExtensions
 import io.joern.x2cpg.utils.{Report, TimeUtils}
@@ -19,6 +20,8 @@ class AstCreationPass(cpg: Cpg, config: Config)(implicit withSchemaValidation: V
 
   private val logger = LoggerFactory.getLogger(getClass)
   private val report = new Report()
+
+  private val rflMetadata = RflMetadata.load(config.rflSrcPaths.toSeq)
 
   private val sourceFiles =
     SourceFiles.determine(
@@ -49,7 +52,7 @@ class AstCreationPass(cpg: Cpg, config: Config)(implicit withSchemaValidation: V
             logger.warn(s"'$relPath' produced ${parseResult.errorCount} syntax error(s); continuing with partial AST")
           }
           Try {
-            diffGraph.absorb(new AstCreator(parseResult, config).createAst())
+            diffGraph.absorb(new AstCreator(parseResult, config, rflMetadata).createAst())
           } match {
             case Failure(exception) =>
               logger.warn(s"Failed to generate CPG for '$filename'", exception)
