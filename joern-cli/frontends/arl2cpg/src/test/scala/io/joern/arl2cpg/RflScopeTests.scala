@@ -130,6 +130,88 @@ ruletask Amended (ctx) { ordering: natural; rules : r.*; }
     }
   }
 
+  "select predicates of scoped duplicate ruletasks" should {
+
+    val dir = writeRfls(("a.rfl", "A", uuid1, List("Step")), ("b.rfl", "B", uuid2, List("Step")))
+    val cpg = arlCpg(
+      """ruleset Twin (S){
+  rule `r.1` { then { } }
+}
+ruletask `A>Step` (ctx) { ordering: natural; rules: r.*; select (Object r) { return true; } }
+ruletask `A>Step` (ctx) { ordering: natural; rules: r.*; select (Object r) { return true; } }
+ruletask `B>Step` (ctx) { ordering: natural; rules: r.*; select (Object r) { return true; } }
+ruletask `B>Step` (ctx) { ordering: natural; rules: r.*; select (Object r) { return true; } }
+""",
+      Option(dir)
+    )
+
+    "emit select METHODs whose METHOD_REFs resolve to them" in {
+      val methodFullNames = cpg.method.filter(_.name.endsWith("$select")).fullName.l.toSet
+      methodFullNames.shouldBe(
+        Set(
+          s"Twin.A>Step$$select@$uuid1:boolean(java.lang.Object)",
+          s"Twin.A>Step$$select@$uuid1:boolean(java.lang.Object)",
+          s"Twin.B>Step$$select@$uuid2:boolean(java.lang.Object)",
+          s"Twin.B>Step$$select@$uuid2:boolean(java.lang.Object)"
+        )
+      )
+      val scopedRefTargets =
+        cpg.methodRef.filter(_.methodFullName.contains("$select")).methodFullName.l.toSet
+      scopedRefTargets.shouldBe(
+        Set(
+          s"Twin.A>Step$$select@$uuid1:boolean(java.lang.Object)",
+          s"Twin.B>Step$$select@$uuid2:boolean(java.lang.Object)"
+        )
+      )
+      scopedRefTargets.subsetOf(methodFullNames).shouldBe(true)
+    }
+  }
+
+  "a task qualified to a flow not in the metadata" should {
+
+    val dir = writeRfls(("b.rfl", "B", uuid2, List("Step")))
+    val cpg = arlCpg(
+      """ruleset Twin (S){
+  rule `r.1` { then { } }
+}
+ruletask `A>Step` (ctx) { ordering: natural; rules: r.*; }
+ruletask `A>Step` (ctx) { ordering: natural; rules: r.*; }
+""",
+      Option(dir)
+    )
+
+    "stay unscoped instead of matching by bare id" in {
+      val steps = cpg.method.name("A>Step").l
+      steps.size.shouldBe(2)
+      steps.map(_.fullName).toSet.shouldBe(Set("Twin.A>Step:void()"))
+      steps.map(scopeOf).toSet.shouldBe(Set("ambiguous"))
+      steps.flatMap(_.annotation.name("ruleflowUuid").l).shouldBe(Nil)
+    }
+  }
+
+  "a scoped caller calling a qualified cross-flow target" should {
+
+    val dir = writeRfls(("a.rfl", "A", uuid1, List("Main", "Sub")), ("b.rfl", "B", uuid2, List("Main")))
+    val cpg = arlCpg(
+      """ruleset Twin (S){
+  rule `r.1` { then { } }
+}
+flowtask Main ($p) { { call task: Sub; } }
+flowtask Main ($p) { { } }
+flowtask Sub ($p) { { call task: B>Main; } }
+""",
+      Option(dir)
+    )
+
+    "resolve the caller's scope and the qualified target's uuid" in {
+      val sub = cpg.method.name("Sub").head
+      scopeOf(sub).shouldBe("resolved")
+      uuidOf(sub).shouldBe(uuid1)
+      sub.fullName.shouldBe("Twin.Sub:void()")
+      sub.ast.isCall.name("B>Main").methodFullName.l.shouldBe(List(s"Twin.B>Main@$uuid2:void()"))
+    }
+  }
+
   "tasks without any rfl metadata" should {
 
     val cpg = arlCpg(twinArl("call task: Plain;", "call task: Amended;"), None)
