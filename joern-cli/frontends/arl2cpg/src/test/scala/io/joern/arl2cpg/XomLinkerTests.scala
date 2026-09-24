@@ -12,7 +12,8 @@ import java.nio.file.{Files, Path}
 
 class XomLinkerTests extends AnyWordSpec with Matchers {
 
-  private val arlCode = """import loan.Borrower;
+  private val arlCode = """import loan.Address;
+import loan.Borrower;
 import loan.LoanUtil;
 public signature S extends java.lang.Object {
   public in Borrower borrower = null;
@@ -26,6 +27,10 @@ ruleset R (S){
       x = borrower.getBankruptcyAge();
       y = borrower.creditScore;
       z = LoanUtil.compute(x);
+      w = borrower.address.getZip();
+      v = borrower.address.primary;
+      Address a = borrower.getAddress();
+      q = a.getZip();
     }
   }
 }
@@ -34,7 +39,16 @@ ruleset R (S){
   private val borrowerJava = """package loan;
 public class Borrower {
   public int creditScore;
+  public Address address;
   public int getBankruptcyAge() { return 0; }
+  public Address getAddress() { return address; }
+}
+"""
+
+  private val addressJava = """package loan;
+public class Address {
+  public String getZip() { return ""; }
+  public boolean isPrimary() { return true; }
 }
 """
 
@@ -51,6 +65,7 @@ public class LoanUtil {
       Files.createDirectories(xomDir.resolve("loan"))
       Files.writeString(xomDir.resolve("loan/Borrower.java"), borrowerJava)
       Files.writeString(xomDir.resolve("loan/LoanUtil.java"), loanUtilJava)
+      Files.writeString(xomDir.resolve("loan/Address.java"), addressJava)
 
       val config = Config().withInputPath(dir.toString).withXomSrcPaths(Set(xomDir.toString))
       val cpg    = new Arl2Cpg().createCpg(config).get
@@ -82,6 +97,25 @@ public class LoanUtil {
       call should not be empty
       call.get.methodFullName should include("loan.LoanUtil.compute")
       call.get.dispatchType shouldBe DispatchTypes.STATIC_DISPATCH
+    }
+
+    "resolve a call through a field-access receiver: borrower.address.getZip()" in withXomCpg { cpg =>
+      val calls = cpg.call.name("getZip").l
+      calls.size shouldBe 2
+      calls.foreach(_.methodFullName shouldBe "loan.Address.getZip:java.lang.String()")
+    }
+
+    "type a getter-only Java property: borrower.address.primary" in withXomCpg { cpg =>
+      val fa = cpg.call.name(Operators.fieldAccess).code(".*address.primary").l
+      fa.size shouldBe 1
+      fa.head.typeFullName shouldBe "boolean"
+    }
+
+    "propagate assignment types: Address a = borrower.getAddress(); a.getZip()" in withXomCpg { cpg =>
+      cpg.local.name("a").head.typeFullName shouldBe "loan.Address"
+      val call = cpg.call.name("getZip").l
+      call.size shouldBe 2
+      call.foreach(_.methodFullName shouldBe "loan.Address.getZip:java.lang.String()")
     }
 
     "create CALL edges into the Java methods after default overlays" in withXomCpg { cpg =>
