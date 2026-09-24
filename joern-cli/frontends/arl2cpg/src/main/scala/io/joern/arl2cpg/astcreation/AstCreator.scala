@@ -152,6 +152,18 @@ class AstCreator(val parseResult: ArlParseResult, val config: Config)(implicit w
   protected def boundValueType(name: String): String =
     valueScope.top.get(name).map(_.typeFullName).getOrElse(Defines.Any)
 
+  /** Run `body` with a snapshot of the current scope restored afterwards: bindings declared inside a nested block do
+    * not leak to the enclosing method scope (lexical block scoping).
+    */
+  protected def withBlockScope[T](body: => T): T = {
+    val snapshot = valueScope.top.clone()
+    try body
+    finally {
+      valueScope.top.clear()
+      valueScope.top ++= snapshot
+    }
+  }
+
   protected def boundValueNode(name: String): Option[NewNode] =
     valueScope.top.get(name).map(_.node)
 

@@ -138,7 +138,7 @@ trait AstForFlow {
   }
 
   private def blockChildrenAsts(ctx: ARLParser.BlockContext): List[Ast] =
-    ctx.statement().asScala.toList.flatMap(astsForStatement)
+    withBlockScope(ctx.statement().asScala.toList.flatMap(astsForStatement))
 
   /** `ruletask name(id) { initial? props* rules: sel; select? final? }`. */
   private def astForRuletask(ctx: ARLParser.RuletaskDeclContext): Ast = {

@@ -61,6 +61,70 @@ functiontask `body>sub` {
     }
   }
 
+  "nested block scoping" should {
+
+    val shadowArl = """ruleset R (S){
+  rule `shadow.rule` {
+    then {
+      int x = 1;
+      {
+        int x = 2;
+        x = 5;
+      }
+      x = 3;
+    }
+  }
+}
+"""
+
+    val cpg = code(shadowArl)
+
+    "REF same-named locals to their own block's declaration" in {
+      val locals = cpg.method.name("shadow.rule").ast.isLocal.name("x").l.sortBy(_.lineNumber.getOrElse(0))
+      locals.size.shouldBe(2)
+      locals(0).referencingIdentifiers.size.shouldBe(2) // decl lhs + `x = 3`
+      locals(1).referencingIdentifiers.size.shouldBe(2) // decl lhs + `x = 5`
+    }
+  }
+
+  "an enhanced-for loop variable" should {
+
+    val forArl = """ruleset R (S){
+  rule `for.rule` {
+    then {
+      Object item = null;
+      for (Object item : items) { foo(item); }
+      item = null;
+    }
+  }
+}
+"""
+
+    val cpg = code(forArl)
+
+    "REF the body identifier to the loop local" in {
+      val loopLocal = cpg.method
+        .name("for.rule")
+        .ast
+        .isLocal
+        .name("item")
+        .l
+        .sortBy(_.lineNumber.getOrElse(0))
+        .apply(1)
+      loopLocal.referencingIdentifiers.size should be >= 1
+      loopLocal.referencingIdentifiers.code.l.should(contain("item"))
+    }
+
+    "REF the post-loop identifier to the outer local" in {
+      val locals = cpg.method.name("for.rule").ast.isLocal.name("item").l.sortBy(_.lineNumber.getOrElse(0))
+      locals.size.shouldBe(2)
+      // outer: decl lhs `Object item = null` + post-loop `item = null`
+      locals(0).referencingIdentifiers.size.shouldBe(2)
+      locals(1).referencingIdentifiers.size should be >= 1
+      locals(0).referencingIdentifiers.code.l.should(contain("item"))
+    }
+  }
+
   "a flowtask $-param" should {
 
     val cpg = code(arl)

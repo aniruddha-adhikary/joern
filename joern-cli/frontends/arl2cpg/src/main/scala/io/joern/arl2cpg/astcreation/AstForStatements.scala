@@ -18,7 +18,7 @@ trait AstForStatements {
   // ------------------------------------------------------------------
 
   protected def astForBlock(ctx: ARLParser.BlockContext): Ast =
-    blockAst(blockNode(ctx), ctx.statement().asScala.toList.flatMap(astsForStatement))
+    blockAst(blockNode(ctx), withBlockScope(ctx.statement().asScala.toList.flatMap(astsForStatement)))
 
   /** A single statement lowers to zero or more ASTs (a localVarDecl with an initialiser produces LOCAL + assignment).
     */
@@ -50,8 +50,8 @@ trait AstForStatements {
   private def astForIfStatement(ctx: ARLParser.StatementContext): Ast = {
     val condition = Option(ctx.expression()).map(astForExpression).getOrElse(unknownAst(ctx))
     val stmts     = ctx.statement().asScala.toList
-    val thenAst   = stmts.headOption.map(astsForStatement).getOrElse(List.empty)
-    val elseAst   = stmts.drop(1).flatMap(astsForStatement)
+    val thenAst   = withBlockScope(stmts.headOption.map(astsForStatement).getOrElse(List.empty))
+    val elseAst   = withBlockScope(stmts.drop(1).flatMap(astsForStatement))
     ifThenElseAst(
       ctx,
       Option(condition),
@@ -66,35 +66,44 @@ trait AstForStatements {
   private def astForForStatement(ctx: ARLParser.StatementContext): Ast = {
     // `for ( T id : e ) stmt`  (enhanced) or `for ( init? ; cond? ; update? ) stmt`.
     val stmts = ctx.statement().asScala.toList
-    val body  = wrapMultipleInBlock(stmts.flatMap(astsForStatement), line(ctx))
     if (Option(ctx.`type`()).isDefined) {
-      // enhanced for: for ( type name : expression ) statement
+      // enhanced for: for ( type name : expression ) statement — the loop local is declared
+      // before its body is lowered so body identifiers REF it, and does not leak afterwards.
       val varName = Option(ctx.Identifier())
         .map(_.getText)
         .orElse(Option(ctx.BacktickId()).map(_.getText))
         .getOrElse("<unknown>")
-      val tName = typeFullName(ctx.`type`())
-      val local = localNode(ctx, varName, s"${ctx.`type`().getText} $varName", tName)
-      declareValue(varName, tName, local)
+      val tName    = typeFullName(ctx.`type`())
+      val local    = localNode(ctx, varName, s"${ctx.`type`().getText} $varName", tName)
       val iterExpr = Option(ctx.expression()).map(astForExpression).getOrElse(unknownAst(ctx))
+      val body     = withBlockScope {
+        declareValue(varName, tName, local)
+        wrapMultipleInBlock(stmts.flatMap(astsForStatement), line(ctx))
+      }
       forAst(ctx, Seq(Ast(local)), Seq.empty, Seq(iterExpr), Seq.empty, Seq(body))
     } else {
-      val initAsts = Option(ctx.forInit()).toList.flatMap { init =>
-        Option(init.localVarDecl()).map(astsForLocalVarDecl).getOrElse {
-          Option(init.expressionList()).toList.flatMap(_.expression().asScala.toList).map(astForExpression)
+      // Classic for: init/condition/update/body all see the for's own scope.
+      withBlockScope {
+        val body     = wrapMultipleInBlock(stmts.flatMap(astsForStatement), line(ctx))
+        val initAsts = Option(ctx.forInit()).toList.flatMap { init =>
+          Option(init.localVarDecl()).map(astsForLocalVarDecl).getOrElse {
+            Option(init.expressionList()).toList.flatMap(_.expression().asScala.toList).map(astForExpression)
+          }
         }
+        // children of the header are forInit? ; expression? ; expressionList? — the lone
+        // expression() child (if present) is the condition; expressionList() is the update.
+        val condAst    = Option(ctx.expression()).map(astForExpression)
+        val updateAsts =
+          Option(ctx.expressionList()).toList.flatMap(_.expression().asScala.toList.map(astForExpression))
+        forAst(ctx, Seq.empty, initAsts, condAst.toList, updateAsts, Seq(body))
       }
-      // Classic for: children of the header are forInit? ; expression? ; expressionList? — the lone
-      // expression() child (if present) is the condition; expressionList() is the update.
-      val condAst    = Option(ctx.expression()).map(astForExpression)
-      val updateAsts = Option(ctx.expressionList()).toList.flatMap(_.expression().asScala.toList.map(astForExpression))
-      forAst(ctx, Seq.empty, initAsts, condAst.toList, updateAsts, Seq(body))
     }
   }
 
   private def astForWhileStatement(ctx: ARLParser.StatementContext): Ast = {
     val condition = Option(ctx.expression()).map(astForExpression).getOrElse(unknownAst(ctx))
-    val body      = wrapMultipleInBlock(ctx.statement().asScala.toList.flatMap(astsForStatement), line(ctx))
+    val body      =
+      wrapMultipleInBlock(withBlockScope(ctx.statement().asScala.toList.flatMap(astsForStatement)), line(ctx))
     whileAst(ctx, Option(condition), Seq(body))
   }
 
@@ -205,7 +214,7 @@ trait AstForStatements {
       .typeFullName(Defines.Any)
       .lineNumber(line(ctx))
       .columnNumber(column(ctx))
-    blockAst(block, ctx.block().statement().asScala.toList.flatMap(astsForStatement))
+    blockAst(block, withBlockScope(ctx.block().statement().asScala.toList.flatMap(astsForStatement)))
   }
 
   /** `then N block` (decision-table row) → BLOCK with code `then N`. */
@@ -215,7 +224,7 @@ trait AstForStatements {
       .typeFullName(Defines.Any)
       .lineNumber(line(ctx))
       .columnNumber(column(ctx))
-    blockAst(block, ctx.block().statement().asScala.toList.flatMap(astsForStatement))
+    blockAst(block, withBlockScope(ctx.block().statement().asScala.toList.flatMap(astsForStatement)))
   }
 
   // ------------------------------------------------------------------
