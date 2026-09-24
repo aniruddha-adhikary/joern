@@ -84,7 +84,6 @@ trait AstForStatements {
     } else {
       // Classic for: init/condition/update/body all see the for's own scope.
       withBlockScope {
-        val body     = wrapMultipleInBlock(stmts.flatMap(astsForStatement), line(ctx))
         val initAsts = Option(ctx.forInit()).toList.flatMap { init =>
           Option(init.localVarDecl()).map(astsForLocalVarDecl).getOrElse {
             Option(init.expressionList()).toList.flatMap(_.expression().asScala.toList).map(astForExpression)
@@ -95,6 +94,7 @@ trait AstForStatements {
         val condAst    = Option(ctx.expression()).map(astForExpression)
         val updateAsts =
           Option(ctx.expressionList()).toList.flatMap(_.expression().asScala.toList.map(astForExpression))
+        val body = wrapMultipleInBlock(stmts.flatMap(astsForStatement), line(ctx))
         forAst(ctx, Seq.empty, initAsts, condAst.toList, updateAsts, Seq(body))
       }
     }
