@@ -5,10 +5,20 @@ import io.joern.x2cpg.{X2CpgConfig, X2CpgMain}
 import scopt.OParser
 
 /** Command line configuration parameters for the arl2cpg frontend.
+  *
+  * @param xomSrcPaths
+  *   Java sources of the eXecution Object Model, imported into the same CPG.
+  * @param b2xPath
+  *   the archive's BOM-to-XOM mapping (`b2x.b2x`), which holds the bodies of the methods the ARL only calls.
+  * @param allowUnknown
+  *   when false (the default), any construct lowered to an UNKNOWN node or any syntax error fails the build after the
+  *   findings have been written. Mirrors arlgraph's Gate 1.
   */
 final case class Config(
   xomSrcPaths: Set[String] = Set.empty,
   rflSrcPaths: Set[String] = Set.empty,
+  b2xPath: Option[String] = None,
+  allowUnknown: Boolean = false,
   override val genericConfig: X2CpgConfig.GenericConfig = X2CpgConfig.GenericConfig()
 ) extends X2CpgConfig[Config] {
 
@@ -18,6 +28,10 @@ final case class Config(
   def withXomSrcPaths(paths: Set[String]): Config = copy(xomSrcPaths = paths)
 
   def withRflSrcPaths(paths: Set[String]): Config = copy(rflSrcPaths = paths)
+
+  def withB2xPath(path: String): Config = copy(b2xPath = Option(path))
+
+  def withAllowUnknown(value: Boolean): Config = copy(allowUnknown = value)
 }
 
 private object Frontend {
@@ -40,6 +54,18 @@ private object Frontend {
           "path to ODM ruleflow metadata (.rfl files, searched recursively). Repeatable. The metadata " +
             "disambiguates flow tasks that share a visible name by scoping their fullName with the " +
             "ruleflow uuid."
+        ),
+      opt[String]("b2x")
+        .action((path, config) => config.withB2xPath(path))
+        .text(
+          "path to the archive's BOM-to-XOM mapping (RULES_ENGINE/default/resources/ruleset/b2x.b2x). Its ARL " +
+            "method bodies resolve the effects of calls the ARL itself only names."
+        ),
+      opt[Unit]("allow-unknown")
+        .action((_, config) => config.withAllowUnknown(true))
+        .text(
+          "keep going when a construct lowers to an UNKNOWN node or a file has syntax errors. The CPG is then " +
+            "tainted: every gap is still recorded as a FINDING. Without this flag such a build exits non-zero."
         )
     )
   }

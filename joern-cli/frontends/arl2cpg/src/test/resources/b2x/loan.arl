@@ -1,0 +1,123 @@
+// Synthetic resolved-ARL fixture in the shape produced by the ODM build command.
+import com.acme.loan.model;
+import com.acme.loan.util.LoanUtil;
+
+public signature LoanValidation extends ilog.rules.engine.IlrSignature {
+    public in com.acme.loan.model.Application application = null;
+    public out com.acme.loan.model.Outcome outcome = null;
+}
+
+ruleset LoanValidation (LoanValidation) {
+
+    rule `validation.CheckApplicantAge` {
+        status = "new"
+        ilog.rules.business_name = "Check applicant age"
+        ilog.rules.package_name = "validation"
+        ilog.rules.dt = ""
+        when {
+            app: com.acme.loan.model.Application(application != null);
+            evaluate(app.getApplicant() != null);
+        }
+        then {
+            outcome.setAgeChecked(true);
+            if (app.getApplicant().getAge() < 18) {
+                outcome.rejectWith(Reason.UNDERAGE, app.getApplicant().getAge());
+            }
+        }
+    }
+
+    rule `validation.IncomeBands` {
+        ilog.rules.business_name = "Income bands"
+        ilog.rules.package_name = "validation"
+        ilog.rules.dt = "validation.IncomeBands"
+        when {
+            app: com.acme.loan.model.Application(application != null);
+        }
+        match many {
+            case (app.getIncome() < 1000) : then 1 {
+                outcome.rejectWith(Reason.LOW_INCOME, app.getIncome());
+            }
+            case (app.getIncome() < 5000) : then 2 {
+                outcome.setBand(Band.MEDIUM);
+            }
+            case (LoanUtil.isFilled(app.getEmployerName())) : then 4 {
+                if (app.getTenureMonths() > 24) {
+                    outcome.setBand(Band.HIGH);
+                } else {
+                    outcome.setBand(Band.MEDIUM);
+                }
+            }
+            default : then 7 {
+                outcome.setBand(Band.UNKNOWN);
+            }
+        }
+    }
+
+    rule `pricing.ApplyRate` {
+        ilog.rules.business_name = "Apply rate"
+        ilog.rules.package_name = "pricing"
+        ilog.rules.dt = ""
+        when {
+            not { com.acme.loan.model.Rejection(); }
+            exists { com.acme.loan.model.Application(); }
+        }
+        then {
+            outcome.setRate(LoanUtil.rateFor(outcome.getBand()));
+            outcome.setNote(outcome.summary);
+            outcome.flag(1);
+        }
+    }
+}
+
+ruleflow LoanFlow ($loanflow) {
+    maintask MainTask;
+}
+
+flowtask MainTask ($loanflow) {
+    initial {
+        outcome.setStarted(true);
+    }
+    {
+        call task: Validate;
+        if (outcome.isRejected()) {
+            call task: Report > EmitRejection;
+        } else {
+            fork {
+                call task: Price;
+            } && {
+                call task: Audit;
+            }
+            call task: Report > EmitApproval;
+        }
+    }
+    final {
+        outcome.setFinished(true);
+        outcome.archive();
+    }
+}
+
+ruletask Validate (LoanValidation) {
+    ordering : literal;
+    criteria : all;
+    rules : validation.*;
+}
+
+ruletask Price (LoanValidation) {
+    initial {
+        outcome.setPricing(true);
+    }
+    ordering : priority;
+    criteria : all;
+    rules : pricing.ApplyRate;
+    select (com.acme.loan.model.Application app) {
+        return app.getIncome() > 0;
+    }
+}
+
+functiontask Audit ($loanflow) {
+    LoanUtil.audit(outcome, application.digest());
+}
+
+functiontask Report ($loanflow) {
+    outcome.report();
+}

@@ -1,6 +1,7 @@
 package io.joern.arl2cpg
 
-import io.joern.arl2cpg.passes.{AstCreationPass, XomLinkerPass}
+import io.joern.arl2cpg.b2x.B2xModel
+import io.joern.arl2cpg.passes.{AstCreationPass, B2xEffectsPass, FindingsPass, ParseDiagnostics, XomLinkerPass}
 import io.joern.javasrc2cpg.{Config as JavaSrcConfig}
 import io.joern.javasrc2cpg.passes.{AstCreationPass as JavaSrcAstCreationPass, OuterClassRefPass, TypeInferencePass}
 import io.joern.x2cpg.SourceFiles
@@ -11,6 +12,7 @@ import io.joern.x2cpg.passes.frontend.{MetaDataPass, TypeNodePass}
 import io.shiftleft.codepropertygraph.generated.Cpg
 import org.slf4j.LoggerFactory
 
+import java.nio.file.{Files, Paths}
 import scala.util.Try
 
 class Arl2Cpg extends X2CpgFrontend {
@@ -19,16 +21,38 @@ class Arl2Cpg extends X2CpgFrontend {
   override type ConfigType = Config
   override val defaultConfig: Config = Config()
 
+  /** Builds the CPG. The output is written even when the build then fails Gate 1 (an UNKNOWN node or a syntax error
+    * without `--allow-unknown`): the returned `Failure` carries a [[io.joern.arl2cpg.passes.Gate1Violation]], the CPG
+    * on disk carries the FINDING nodes that explain it.
+    */
   def createCpg(config: Config): Try[Cpg] = {
+    Try(config.b2xPath.map(loadB2x)).flatMap { b2x =>
+      buildCpg(config, b2x)
+    }
+  }
+
+  private def buildCpg(config: Config, b2x: Option[B2xModel]): Try[Cpg] = {
     withNewEmptyCpg(config.outputPath, config) { (cpg, config) =>
+      val diagnostics = new ParseDiagnostics
       MetaDataPass(cpg, Language, config.inputPath).createAndApply()
-      new AstCreationPass(cpg, config)(config.schemaValidation).createAndApply()
+      new AstCreationPass(cpg, config, diagnostics)(config.schemaValidation).createAndApply()
       config.xomSrcPaths.foreach(runJavasrcPasses(cpg, _))
       TypeNodePass.withTypesFromCpg(cpg).createAndApply()
       if (config.xomSrcPaths.nonEmpty) {
         new XomLinkerPass(cpg).createAndApply()
       }
+      new B2xEffectsPass(cpg, b2x).createAndApply()
+      new FindingsPass(cpg, diagnostics, config.allowUnknown).createAndApply()
     }
+  }
+
+  /** A missing or unreadable mapping is a hard error, not a silent downgrade to a graph without body effects. */
+  private def loadB2x(path: String): B2xModel = {
+    val file = Paths.get(path)
+    if (!Files.isRegularFile(file)) {
+      throw new IllegalArgumentException(s"--b2x: '$path' is not a readable file")
+    }
+    B2xModel.parse(file)
   }
 
   /** Runs javasrc2cpg's passes for the XOM sources into the same CPG, mirroring `JavaSrc2Cpg.createCpg` minus the

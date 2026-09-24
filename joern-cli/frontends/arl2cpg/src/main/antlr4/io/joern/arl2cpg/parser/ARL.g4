@@ -336,7 +336,7 @@ intervalLiteral
     ;
 
 literal
-    : Integer | FloatLit | StringLit
+    : Integer | FloatLit | StringLit | CharLit
     | 'true' | 'false' | 'null'
     ;
 
@@ -395,6 +395,8 @@ fragment FloatSuffix : [fFdD] ;
 // is measured (ODM 9.6, permitty VOC-UT).
 Integer    : [0-9]+ [lL]? ;
 StringLit  : '"' ( '\\' . | ~["\\] )* '"' ;
+// Java char literal: `person.initial == 'A'` is measured (ODM 9.6, permitty D08 and D22).
+CharLit    : '\'' ( '\\' . | ~['\\] ) '\'' ;
 
 Identifier : [a-zA-Z_] [a-zA-Z_0-9]* ;
 

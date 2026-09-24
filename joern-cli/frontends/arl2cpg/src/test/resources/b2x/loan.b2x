@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Synthetic BOM-to-XOM mapping in the shape IBM writes to
+  RULES_ENGINE/default/resources/ruleset/b2x.b2x inside a deployed .dsar.
+
+  It pairs with loan.arl, which only ever *calls* these methods: `outcome.rejectWith(...)` is
+  where `outcome.rejected` is really written, and nothing in the ARL says so.
+-->
+<b2x:translation xmlns:b2x="http://schemas.ilog.com/JRules/1.3/Translation">
+    <id>fixture-0000-0000-0000-000000000000</id>
+    <lang>ARL</lang>
+
+    <class>
+        <businessName>com.acme.loan.model.Outcome</businessName>
+        <!-- partially resolvable: the write is visible, addReason is compiled Java -->
+        <method>
+            <name>rejectWith</name>
+            <parameter type="com.acme.loan.model.Reason"/>
+            <parameter type="int"/>
+            <body language="arl"><![CDATA[
+            this.setRejected(true);
+            this.addReason(reason);
+            ]]></body>
+        </method>
+        <!-- fully resolvable: nothing in here is opaque -->
+        <method>
+            <name>report</name>
+            <body language="arl"><![CDATA[
+            this.setReported(true);
+            ]]></body>
+        </method>
+        <!-- overloaded on parameter type; the ARL call site gives arguments, not their types -->
+        <method>
+            <name>flag</name>
+            <parameter type="java.lang.String"/>
+            <body language="arl"><![CDATA[
+            this.setFlagged(true);
+            ]]></body>
+        </method>
+        <method>
+            <name>flag</name>
+            <parameter type="int"/>
+            <body language="arl"><![CDATA[
+            this.setFlagCode(code);
+            ]]></body>
+        </method>
+        <!-- computed attribute: `outcome.summary` is not stored anywhere -->
+        <attribute>
+            <name>summary</name>
+            <getter language="arl"><![CDATA[
+            return this.getBand();
+            ]]></getter>
+        </attribute>
+    </class>
+    <class>
+        <businessName>com.acme.loan.model.OutcomeBase</businessName>
+        <!-- inherited: the ARL calls it on an Outcome, and only the BOM says Outcome extends this -->
+        <method>
+            <name>archive</name>
+            <body language="arl"><![CDATA[
+            this.setArchived(true);
+            ]]></body>
+        </method>
+    </class>
+</b2x:translation>
