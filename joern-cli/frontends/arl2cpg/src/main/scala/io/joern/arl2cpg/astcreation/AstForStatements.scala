@@ -75,7 +75,7 @@ trait AstForStatements {
         .getOrElse("<unknown>")
       val tName = typeFullName(ctx.`type`())
       val local = localNode(ctx, varName, s"${ctx.`type`().getText} $varName", tName)
-      declareValue(varName, tName)
+      declareValue(varName, tName, local)
       val iterExpr = Option(ctx.expression()).map(astForExpression).getOrElse(unknownAst(ctx))
       forAst(ctx, Seq(Ast(local)), Seq.empty, Seq(iterExpr), Seq.empty, Seq(body))
     } else {
@@ -108,9 +108,9 @@ trait AstForStatements {
     val name  = Option(ctx.Identifier()).map(_.getText).getOrElse("<unknown>")
     val tName = Option(ctx.`type`()).map(typeFullName).getOrElse(Defines.Any)
     val local = localNode(ctx, name, code(ctx), tName)
-    declareValue(name, tName)
+    declareValue(name, tName, local)
     val initAst = Option(ctx.expression()).map { expr =>
-      val lhs    = Ast(identifierNode(ctx, name, name, tName))
+      val lhs    = boundIdentifierAst(ctx, name, name, tName)
       val assign = callNode(
         ctx,
         s"$name = ${code(expr)}",

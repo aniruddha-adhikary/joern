@@ -224,7 +224,7 @@ trait AstForExpressions {
           case "new"                        => astForCreator(ctx.creator())
           case "this"                       => astForThis(ctx)
           case "("                          => astForExpression(ctx.expression())
-          case text if text.startsWith("$") => Ast(identifierNode(ctx, text, text, Defines.Any))
+          case text if text.startsWith("$") => boundIdentifierAst(ctx, text, text, Defines.Any)
           case _                            => unknownAst(ctx)
         }
       case Some(q: ARLParser.QualifiedNameContext) => astForQualifiedNameExpr(q, Option(ctx.arguments()))
@@ -235,9 +235,9 @@ trait AstForExpressions {
   private def astForThis(ctx: ParserRuleContext): Ast = {
     implicitReceiver.top match {
       case Some((bindingName, bindingType)) =>
-        Ast(identifierNode(ctx, bindingName, "this", bindingType))
+        boundIdentifierAst(ctx, bindingName, "this", bindingType)
       case None =>
-        Ast(identifierNode(ctx, "this", "this", thisParamType))
+        thisIdentifierAst(ctx, thisParamType)
     }
   }
 
@@ -295,7 +295,7 @@ trait AstForExpressions {
       // binding / local / task param
       val tpe =
         if (isBoundValue(first)) boundValueType(first) else implicitReceiver.top.map(_._2).getOrElse(Defines.Any)
-      val base = Ast(identifierNode(ctx, first, first, tpe))
+      val base = boundIdentifierAst(ctx, first, first, tpe)
       rest match {
         case Nil if hasArgs =>
           // calling a bound name as a function: e.g. `b(...)` — treat as dynamic call on it
@@ -341,7 +341,7 @@ trait AstForExpressions {
     } else if (implicitReceiver.top.isDefined && !isLikelyTypeName(first)) {
       // unqualified name inside a pattern test → resolve against the pattern's own binding
       val (bindingName, bindingType) = implicitReceiver.top.get
-      val base = Ast(identifierNode(ctx, bindingName, s"$bindingName.${(first +: rest).mkString(".")}", bindingType))
+      val base = boundIdentifierAst(ctx, bindingName, s"$bindingName.${(first +: rest).mkString(".")}", bindingType)
       dynamicSuffix(base, first +: rest, argAsts, hasArgs)
     } else if (rest.isEmpty && (hasArgs || isLikelyTypeName(first) == false && first.headOption.exists(_.isLower))) {
       // bare x(...) or unknown lowercase bare name

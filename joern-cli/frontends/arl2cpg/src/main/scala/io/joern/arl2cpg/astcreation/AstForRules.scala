@@ -150,7 +150,9 @@ trait AstForRules {
     implicitReceiver.push(None)
     syntheticBindingCount = 0
 
-    val method = methodNode(
+    // Create the `this` parameter before the body so `this` identifiers inside it can REF it.
+    val thisAst = thisParamAst(ctx)
+    val method  = methodNode(
       ctx,
       name,
       methodCode,
@@ -188,7 +190,7 @@ trait AstForRules {
         overriddenRules.map(target => overridesAnnotationAst(ctx, target))
 
     val ast =
-      methodAstWithAnnotations(method, Seq(thisParamAst(ctx)), body, methodRet, annotations = propertyAnnotations)
+      methodAstWithAnnotations(method, Seq(thisAst), body, methodRet, annotations = propertyAnnotations)
     valueScope.pop()
     implicitReceiver.pop()
     ast
