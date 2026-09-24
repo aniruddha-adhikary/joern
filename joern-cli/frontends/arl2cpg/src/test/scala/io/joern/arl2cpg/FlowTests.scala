@@ -103,6 +103,65 @@ ruletask `body>select_rules` (ctx) {
     }
   }
 
+  "ruletask select block" should {
+
+    val selArl = """ruleset R (S){
+  rule `a.1` { then { } }
+  rule `a.2` { then { } }
+  rule `b.1` { then { } }
+}
+ruletask dyn (ctx) {
+  ordering: natural;
+  rules : ;
+  select (Object r) { return true; }
+}
+ruletask filtered (ctx) {
+  ordering: natural;
+  rules : a.*;
+  select (Object r) { return true; }
+}
+ruletask plain (ctx) {
+  ordering: natural;
+  rules : b.*;
+}
+"""
+
+    "wrap all file rules in a dynamicSelect when the rules clause is empty" in {
+      val cpg = code(selArl)
+      val dyn = cpg.method.name("dyn").call.name("<operator>.dynamicSelect").l
+      dyn.size shouldBe 1
+      val args = dyn.head.argument.l
+      args.collect { case m: MethodRef => m }.size shouldBe 1
+      val ruleCalls = args.collect { case c: Call => c }
+      ruleCalls.map(_.name).sorted shouldBe List("a.1", "a.2", "b.1")
+      ruleCalls.map(_.methodFullName).sorted shouldBe List("R.a.1:void()", "R.a.2:void()", "R.b.1:void()")
+      cpg.method.name("dyn").annotation.name("rules").code.l shouldBe List("rules: ")
+      cpg.method.name("dyn").annotation.name("selection").code.l shouldBe List("selection: dynamic")
+    }
+
+    "carry <dynamic> as the rules annotation value" in {
+      val cpg   = code(selArl)
+      val rules = cpg.method.name("dyn").annotation.name("rules").head
+      rules.parameterAssign.value.head.code shouldBe "<dynamic>"
+    }
+
+    "restrict the candidates to the matched selector" in {
+      val cpg = code(selArl)
+      val dyn = cpg.method.name("filtered").call.name("<operator>.dynamicSelect").l
+      dyn.size shouldBe 1
+      val ruleCalls = dyn.head.argument.collect { case c: Call => c }
+      ruleCalls.map(_.name).sorted shouldBe List("a.1", "a.2")
+      cpg.method.name("filtered").annotation.name("selection").head.parameterAssign.value.head.code shouldBe "dynamic"
+    }
+
+    "keep bare rule calls and a static selection without a select block" in {
+      val cpg = code(selArl)
+      cpg.method.name("plain").call.name("<operator>.dynamicSelect").size shouldBe 0
+      cpg.method.name("plain").call.name("b.1").methodFullName.l shouldBe List("R.b.1:void()")
+      cpg.method.name("plain").annotation.name("selection").head.parameterAssign.value.head.code shouldBe "static"
+    }
+  }
+
   "flow statements" should {
     "lower call task to the full flow>task name" in {
       val cpg   = code(arl)

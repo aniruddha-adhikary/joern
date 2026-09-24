@@ -1,5 +1,6 @@
 package io.joern.arl2cpg.astcreation
 
+import io.joern.arl2cpg.ArlOperators
 import io.joern.arl2cpg.parser.ARLParser
 import io.joern.x2cpg.{Ast, Defines}
 import io.shiftleft.codepropertygraph.generated.nodes.*
@@ -182,10 +183,15 @@ trait AstForFlow {
 
     // rules: <selector>; — one STATIC call per matching rule of the same file.
     // `code()` slices the original file content so whitespace inside names is preserved.
-    val selectorText = Option(ctx.ruleSelector()).map(code).getOrElse("")
+    val selectorText = Option(ctx.ruleSelector()).map(code).getOrElse("").trim
     val entries      = selectorText.split(',').toList.map(_.trim).filter(_.nonEmpty)
     val matchedRules = entries.flatMap(selectorMatchingRules)
-    val ruleCallAsts = matchedRules.map { ruleName =>
+
+    val selectAsts = Option(ctx.selectBlock()).map(sb => astsForSelectBlock(sb, name))
+    val hasSelect  = selectAsts.isDefined
+    // A select predicate filters a candidate set; an empty rules clause means "all rules of the file".
+    val candidateRules = if (entries.isEmpty && hasSelect) allRuleNames else matchedRules
+    val ruleCallAsts   = candidateRules.map { ruleName =>
       val call = callNode(
         ctx,
         ruleName,
@@ -197,17 +203,39 @@ trait AstForFlow {
       )
       callAst(call, List.empty)
     }
+    // With a select block the candidates are arguments of one <operator>.dynamicSelect call (first arg:
+    // the predicate METHOD_REF) so membership stays a superset and consumers can tell candidates from
+    // statically-selected rules. Without it, bare rule calls as before.
+    val selectionStmts =
+      selectAsts match {
+        case Some(select) =>
+          val dynCall = callNode(
+            ctx,
+            Option(ctx.selectBlock()).map(code).getOrElse("select"),
+            ArlOperators.dynamicSelect,
+            ArlOperators.dynamicSelect,
+            DispatchTypes.STATIC_DISPATCH,
+            Option("void()"),
+            Option("void")
+          )
+          List(callAst(dynCall, select.methodRef.toList ++ ruleCallAsts))
+        case None => ruleCallAsts
+      }
+
     val rulesAnnotation = {
-      val assign = annotationAssignmentAst("value", selectorText, Ast(annotationLiteralNode(ctx, selectorText)))
+      val value  = if (selectorText.nonEmpty) selectorText else if (hasSelect) "<dynamic>" else ""
+      val assign = annotationAssignmentAst("value", value, Ast(annotationLiteralNode(ctx, value)))
       annotationAst(annotationNode(ctx, s"rules: $selectorText", "rules", "rules"), List(assign))
     }
-
-    val selectAsts = Option(ctx.selectBlock()).map(sb => astsForSelectBlock(sb, name))
+    val selectionAnnotation = {
+      val value  = if (hasSelect) "dynamic" else "static"
+      val assign = annotationAssignmentAst("value", value, Ast(annotationLiteralNode(ctx, value)))
+      annotationAst(annotationNode(ctx, s"selection: $value", "selection", "selection"), List(assign))
+    }
 
     val bodyStmts =
       Option(ctx.initialBlock()).toList.flatMap(blk => blockChildrenAsts(blk.block())) ++
-        ruleCallAsts ++
-        selectAsts.flatMap(_.methodRef).toList ++
+        selectionStmts ++
         Option(ctx.finalBlock()).toList.flatMap(blk => blockChildrenAsts(blk.block()))
     val body = blockAst(blockNode(ctx), bodyStmts)
     val ast  = methodAstWithAnnotations(
@@ -215,7 +243,7 @@ trait AstForFlow {
       thisParamAst(ctx) +: params,
       body,
       methodReturnNode(ctx, "void"),
-      annotations = propAnnotations :+ rulesAnnotation
+      annotations = propAnnotations :+ rulesAnnotation :+ selectionAnnotation
     )
     valueScope.pop()
     ast.withChildren(selectAsts.flatMap(_.nestedMethod).toList)
