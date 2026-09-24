@@ -1,6 +1,7 @@
 package io.joern.console
 
 import io.shiftleft.semanticcpg.utils.FileUtil.*
+import io.joern.x2cpg.frontendspecific.arl2cpg
 import io.shiftleft.codepropertygraph.generated.Languages
 import io.shiftleft.semanticcpg.utils.FileUtil
 
@@ -41,6 +42,7 @@ package object cpgcreation {
       case Languages.SWIFTSRC  => Some(SwiftSrcCpgGenerator(conf, rootPath))
       case Languages.RUST      => Some(RustCpgGenerator(conf, rootPath))
       case Languages.ABAP      => Some(AbapSrcCpgGenerator(conf, rootPath))
+      case arl2cpg.Language    => Some(ArlCpgGenerator(conf, rootPath))
       case _                   => None
     }
   }
@@ -117,6 +119,7 @@ package object cpgcreation {
       case fileName if isCFile(fileName)           => Some(Languages.NEWC)
       case fileName if isRustFile(fileName)        => Some(Languages.RUST)
       case fileName if fileName.endsWith(".abap")  => Some(Languages.ABAP)
+      case fileName if fileName.endsWith(".arl")   => Some(arl2cpg.Language)
       case _                                       => None
     }
   }

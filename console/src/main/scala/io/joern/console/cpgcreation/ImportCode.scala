@@ -7,6 +7,7 @@ import io.shiftleft.codepropertygraph.generated.Languages
 import flatgraph.help.Table
 import flatgraph.help.Table.AvailableWidthProvider
 import io.shiftleft.semanticcpg.utils.FileUtil.*
+import io.joern.x2cpg.frontendspecific.arl2cpg
 import io.shiftleft.semanticcpg.utils.FileUtil
 
 import java.nio.file.{Path, Files, Paths}
@@ -74,6 +75,8 @@ class ImportCode[T <: Project](console: io.joern.console.Console[T])(implicit
   def ruby: SourceBasedFrontend = SourceBasedFrontend("ruby", Languages.RUBYSRC, "Ruby source frontend", "rb")
   def rust: RustFrontend        = new RustFrontend()
   def abap: SourceBasedFrontend = new SourceBasedFrontend("abap", Languages.ABAP, "ABAP Source Frontend", "abap")
+  def arl: SourceBasedFrontend  =
+    new SourceBasedFrontend("arl", arl2cpg.Language, "IBM ODM ARL (Action Rule Language) frontend", "arl")
 
   private def allFrontends: List[Frontend] =
     List(
@@ -94,7 +97,8 @@ class ImportCode[T <: Project](console: io.joern.console.Console[T])(implicit
       ruby,
       csharpsrc,
       abap,
-      rust
+      rust,
+      arl
     )
 
   // this is only abstract to force people adding frontends to make a decision whether the frontend consumes binaries or source

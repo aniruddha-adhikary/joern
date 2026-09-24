@@ -25,7 +25,8 @@ object CodeDumper {
       Languages.JAVASRC,
       Languages.JSSRC,
       Languages.SWIFTSRC,
-      Languages.RUST
+      Languages.RUST,
+      "ODMARL"
     )
 
   private def toAbsolutePath(path: String, rootPath: String): String = {
