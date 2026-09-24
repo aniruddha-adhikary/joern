@@ -40,21 +40,10 @@ trait AstForFlow {
       astParentFullName = Option(containerFullName)
     )
     val paramName = ctx.dollarRef().getText
-    declareValue(paramName, Defines.Any)
-    val params = Seq(
-      thisParamAst(ctx),
-      Ast(
-        parameterInNode(
-          ctx,
-          paramName,
-          paramName,
-          1,
-          isVariadic = false,
-          EvaluationStrategies.BY_REFERENCE,
-          Defines.Any
-        )
-      )
-    )
+    val paramNode =
+      parameterInNode(ctx, paramName, paramName, 1, isVariadic = false, EvaluationStrategies.BY_REFERENCE, Defines.Any)
+    declareValue(paramName, Defines.Any, paramNode)
+    val params   = Seq(thisParamAst(ctx), Ast(paramNode))
     val taskName = nameOf(ctx.flowId(1)) // 'maintask' flowId is the second flowId
     val call     = callNode(
       ctx,
@@ -102,22 +91,12 @@ trait AstForFlow {
     val name = nameOf(ctx.flowId())
     valueScope.push(mutable.Map.empty)
     val method    = flowMethodNode(ctx, name)
+    val thisAst   = thisParamAst(ctx)
     val paramName = ctx.dollarRef().getText
-    declareValue(paramName, Defines.Any)
-    val params = Seq(
-      thisParamAst(ctx),
-      Ast(
-        parameterInNode(
-          ctx,
-          paramName,
-          paramName,
-          1,
-          isVariadic = false,
-          EvaluationStrategies.BY_REFERENCE,
-          Defines.Any
-        )
-      )
-    )
+    val paramNode =
+      parameterInNode(ctx, paramName, paramName, 1, isVariadic = false, EvaluationStrategies.BY_REFERENCE, Defines.Any)
+    declareValue(paramName, Defines.Any, paramNode)
+    val params    = Seq(thisAst, Ast(paramNode))
     val bodyStmts =
       Option(ctx.initialBlock()).toList.flatMap(blk => blockChildrenAsts(blk.block())) ++
         Option(ctx.flowSeq()).toList.flatMap(astForFlowSeqStatements) ++
@@ -132,28 +111,28 @@ trait AstForFlow {
   private def astForFunctiontask(ctx: ARLParser.FunctiontaskDeclContext): Ast = {
     val name = nameOf(ctx.flowId())
     valueScope.push(mutable.Map.empty)
-    val method = flowMethodNode(ctx, name)
-    val params = Option(ctx.dollarRef()).map { dollar =>
+    val method  = flowMethodNode(ctx, name)
+    val thisAst = thisParamAst(ctx)
+    val params  = Option(ctx.dollarRef()).map { dollar =>
       val paramName = dollar.getText
-      declareValue(paramName, Defines.Any)
-      Ast(
-        parameterInNode(
-          ctx,
-          paramName,
-          paramName,
-          1,
-          isVariadic = false,
-          EvaluationStrategies.BY_REFERENCE,
-          Defines.Any
-        )
+      val paramNode = parameterInNode(
+        ctx,
+        paramName,
+        paramName,
+        1,
+        isVariadic = false,
+        EvaluationStrategies.BY_REFERENCE,
+        Defines.Any
       )
+      declareValue(paramName, Defines.Any, paramNode)
+      Ast(paramNode)
     }.toList
     val bodyStmts =
       Option(ctx.initialBlock()).toList.flatMap(blk => blockChildrenAsts(blk.block())) ++
         ctx.statement().asScala.toList.flatMap(astsForStatement) ++
         Option(ctx.finalBlock()).toList.flatMap(blk => blockChildrenAsts(blk.block()))
     val body = blockAst(blockNode(ctx), bodyStmts)
-    val ast  = methodAst(method, thisParamAst(ctx) +: params, body, methodReturnNode(ctx, "void"))
+    val ast  = methodAst(method, thisAst +: params, body, methodReturnNode(ctx, "void"))
     valueScope.pop()
     ast
   }
@@ -166,10 +145,13 @@ trait AstForFlow {
     val name = nameOf(ctx.flowId())
     valueScope.push(mutable.Map.empty)
     val method    = flowMethodNode(ctx, name)
+    val thisAst   = thisParamAst(ctx)
     val paramName = Option(ctx.Identifier()).map(_.getText)
     val params    = paramName.map { param =>
-      declareValue(param, Defines.Any)
-      Ast(parameterInNode(ctx, param, param, 1, isVariadic = false, EvaluationStrategies.BY_REFERENCE, Defines.Any))
+      val paramNode =
+        parameterInNode(ctx, param, param, 1, isVariadic = false, EvaluationStrategies.BY_REFERENCE, Defines.Any)
+      declareValue(param, Defines.Any, paramNode)
+      Ast(paramNode)
     }.toList
 
     val propAnnotations = ctx.ruletaskProperty().asScala.toList.map { prop =>
@@ -240,7 +222,7 @@ trait AstForFlow {
     val body = blockAst(blockNode(ctx), bodyStmts)
     val ast  = methodAstWithAnnotations(
       method,
-      thisParamAst(ctx) +: params,
+      thisAst +: params,
       body,
       methodReturnNode(ctx, "void"),
       annotations = propAnnotations :+ rulesAnnotation :+ selectionAnnotation
@@ -263,12 +245,11 @@ trait AstForFlow {
     val selFull = s"$containerFullName.$selName:$selSig"
 
     valueScope.push(mutable.Map.empty)
-    declareValue(varName, varType)
+    val varParam =
+      parameterInNode(ctx, varName, varName, 1, isVariadic = false, EvaluationStrategies.BY_REFERENCE, varType)
+    declareValue(varName, varType, varParam)
     val method = flowMethodNode(ctx, selName, signature = selSig, fullNameSuffix = selSig)
-    val params = Seq(
-      thisParamAst(ctx),
-      Ast(parameterInNode(ctx, varName, varName, 1, isVariadic = false, EvaluationStrategies.BY_REFERENCE, varType))
-    )
+    val params = Seq(thisParamAst(ctx), Ast(varParam))
     val body   = blockAst(blockNode(ctx), blockChildrenAsts(ctx.block()))
     val selAst = methodAst(method, params, body, methodReturnNode(ctx, "boolean"))
     valueScope.pop()

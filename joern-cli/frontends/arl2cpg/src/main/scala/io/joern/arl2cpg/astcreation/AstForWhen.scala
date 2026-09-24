@@ -59,7 +59,7 @@ trait AstForWhen {
     sourceExpr: Option[ARLParser.ExpressionContext]
   ): List[Ast] = {
     val local = localNode(ctx, bindingName, s"$bindingName: $typeName", typeName)
-    declareValue(bindingName, typeName)
+    declareValue(bindingName, typeName, local)
 
     val typeRef = Ast(typeRefNode(ctx, typeName, typeName))
     val rhsCall =
@@ -73,7 +73,7 @@ trait AstForWhen {
       }
     val rhsArgs    = sourceExpr.map(astForExpression).toList
     val rhs        = callAst(rhsCall, typeRef +: rhsArgs)
-    val lhs        = Ast(identifierNode(ctx, bindingName, bindingName, typeName))
+    val lhs        = boundIdentifierAst(ctx, bindingName, bindingName, typeName)
     val assignCall =
       callNode(
         ctx,
@@ -149,8 +149,8 @@ trait AstForWhen {
       case Some(binding) =>
         val bindingName = stripBackticks(binding.getText.stripSuffix(":")).trim
         val local       = localNode(ctx, bindingName, s"$bindingName", Defines.Any)
-        declareValue(bindingName, Defines.Any)
-        val lhs    = Ast(identifierNode(ctx, bindingName, bindingName, Defines.Any))
+        declareValue(bindingName, Defines.Any, local)
+        val lhs    = boundIdentifierAst(ctx, bindingName, bindingName, Defines.Any)
         val rhs    = exprs.headOption.map(astForExpression).getOrElse(unknownAst(ctx))
         val assign = callNode(
           ctx,
@@ -211,7 +211,7 @@ trait AstForWhen {
       if (testAsts.nonEmpty) testAsts
       else
         lowered.map { case (pattern, bindingName, typeName) =>
-          Ast(identifierNode(pattern, bindingName, bindingName, typeName))
+          boundIdentifierAst(pattern, bindingName, bindingName, typeName)
         }
     val existsCall = callAst(
       operatorCallNode(ctx, s"exists ${patterns.map(code).mkString}", ArlOperators.exists, Option(Defines.Any)),
@@ -266,17 +266,17 @@ trait AstForWhen {
     val labelType   = if (isCount) "int" else projType
 
     val labelLocal = localNode(ctx, labelName, labelName, labelType)
-    declareValue(labelName, labelType)
+    declareValue(labelName, labelType, labelLocal)
 
     val aggArgs =
       List(projTypeRef) ++
         collectResults.map { case (_, bindingName, typeName, _) =>
-          Ast(identifierNode(ctx, bindingName, bindingName, typeName))
+          boundIdentifierAst(ctx, bindingName, bindingName, typeName)
         } ++
         collectResults.flatMap(_._4)
     val aggCall = operatorCallNode(ctx, code(ctx), ArlOperators.aggregate, Option(labelType))
     val aggRhs  = callAst(aggCall, aggArgs)
-    val lhs     = Ast(identifierNode(ctx, labelName, labelName, labelType))
+    val lhs     = boundIdentifierAst(ctx, labelName, labelName, labelType)
     val assign  = callNode(
       ctx,
       s"$labelName = ${code(ctx)}",
@@ -288,7 +288,7 @@ trait AstForWhen {
     val stmtAsts  = collectResults.flatMap(_._1) ++ List(Ast(labelLocal), callAst(assign, Seq(lhs, aggRhs)))
     val conjuncts =
       if (negated) {
-        val labelIdent = Ast(identifierNode(ctx, labelName, labelName, labelType))
+        val labelIdent = boundIdentifierAst(ctx, labelName, labelName, labelType)
         List(
           callAst(operatorCallNode(ctx, s"not $labelName", Operators.logicalNot, Option(Defines.Any)), List(labelIdent))
         )

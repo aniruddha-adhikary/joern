@@ -44,9 +44,17 @@ class AstCreator(val parseResult: ArlParseResult, val config: Config)(implicit w
   /** Rule names collected in a pre-pass (includes rules declared later in the file). */
   protected var allRuleNames: List[String] = List.empty
 
-  /** Per-method visible value names (bindings, locals, task params) -> typeFullName. */
-  protected val valueScope: mutable.Stack[mutable.Map[String, String]] =
+  /** A value bound in the current method scope: its type plus the declaring LOCAL/METHOD_PARAMETER_IN node so
+    * identifiers that reference it can carry a REF edge to the declaration.
+    */
+  protected case class BoundValue(typeFullName: String, node: NewNode)
+
+  /** Per-method visible value names (bindings, locals, task params) -> BoundValue. */
+  protected val valueScope: mutable.Stack[mutable.Map[String, BoundValue]] =
     mutable.Stack(mutable.Map.empty)
+
+  /** The `this` METHOD_PARAMETER_IN of the method currently being built; set before its body is lowered. */
+  protected var thisParam: Option[NewMethodParameterIn] = None
 
   /** Implicit receiver inside a pattern's test expression: (bindingName, typeFullName). */
   protected val implicitReceiver: mutable.Stack[Option[(String, String)]] = mutable.Stack(None)
@@ -116,12 +124,21 @@ class AstCreator(val parseResult: ArlParseResult, val config: Config)(implicit w
   protected def thisParamAst(node: ParserRuleContext): Ast = {
     val param =
       parameterInNode(node, "this", "this", 0, isVariadic = false, EvaluationStrategies.BY_REFERENCE, thisParamType)
+    thisParam = Option(param)
     Ast(param)
   }
 
-  /** IDENTIFIER for `this`, typed by the signature (or container) type. */
-  protected def thisIdentifierAst(node: ParserRuleContext, typeFullName: String): Ast =
-    Ast(identifierNode(node, "this", "this", typeFullName))
+  /** IDENTIFIER for `this`, typed by the signature (or container) type, REF'd to the `this` parameter. */
+  protected def thisIdentifierAst(node: ParserRuleContext, typeFullName: String): Ast = {
+    val ident = identifierNode(node, "this", "this", typeFullName)
+    thisParam.fold(Ast(ident))(param => Ast(ident).withRefEdge(ident, param))
+  }
+
+  /** IDENTIFIER for a name bound in the current scope, with a REF edge to its declaration when known. */
+  protected def boundIdentifierAst(node: ParserRuleContext, name: String, code: String, typeFullName: String): Ast = {
+    val ident = identifierNode(node, name, code, typeFullName)
+    boundValueNode(name).fold(Ast(ident))(decl => Ast(ident).withRefEdge(ident, decl))
+  }
 
   /** fieldAccess on an implicit `this` for a signature parameter. */
   protected def signatureParamFieldAccessAst(node: ParserRuleContext, name: String): Ast = {
@@ -133,10 +150,13 @@ class AstCreator(val parseResult: ArlParseResult, val config: Config)(implicit w
   protected def isBoundValue(name: String): Boolean = valueScope.top.contains(name)
 
   protected def boundValueType(name: String): String =
-    valueScope.top.getOrElse(name, Defines.Any)
+    valueScope.top.get(name).map(_.typeFullName).getOrElse(Defines.Any)
 
-  protected def declareValue(name: String, typeFullName: String): Unit = {
-    valueScope.top(name) = typeFullName
+  protected def boundValueNode(name: String): Option[NewNode] =
+    valueScope.top.get(name).map(_.node)
+
+  protected def declareValue(name: String, typeFullName: String, node: NewNode): Unit = {
+    valueScope.top(name) = BoundValue(typeFullName, node)
   }
 
   /** Unknown-node fallback; never throws. */
