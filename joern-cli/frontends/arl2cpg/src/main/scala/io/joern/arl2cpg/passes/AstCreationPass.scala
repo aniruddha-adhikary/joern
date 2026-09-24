@@ -15,8 +15,21 @@ import org.slf4j.LoggerFactory
 import java.nio.file.Paths
 import scala.util.{Failure, Success, Try}
 
-class AstCreationPass(cpg: Cpg, config: Config)(implicit withSchemaValidation: ValidationMode)
-    extends ForkJoinParallelCpgPass[String](cpg) {
+/** Syntax-error counts per file, collected while the AST is built so [[FindingsPass]] can report them. */
+class ParseDiagnostics {
+  private val errors = new java.util.concurrent.ConcurrentHashMap[String, Int]()
+
+  def record(filename: String, errorCount: Int): Unit = if (errorCount > 0) errors.put(filename, errorCount)
+
+  def syntaxErrors: Map[String, Int] = {
+    import scala.jdk.CollectionConverters.*
+    errors.asScala.toMap
+  }
+}
+
+class AstCreationPass(cpg: Cpg, config: Config, diagnostics: ParseDiagnostics = new ParseDiagnostics)(implicit
+  withSchemaValidation: ValidationMode
+) extends ForkJoinParallelCpgPass[String](cpg) {
 
   private val logger = LoggerFactory.getLogger(getClass)
   private val report = new Report()
@@ -44,18 +57,21 @@ class AstCreationPass(cpg: Cpg, config: Config)(implicit withSchemaValidation: V
       ArlParserFacade.parse(filename) match {
         case Failure(exception) =>
           logger.warn(s"Failed to parse '$filename'", exception)
+          diagnostics.record(filename, 1)
           (false, relPath)
         case Success(parseResult) =>
           val fileLOC = IOUtils.readLinesInFile(Paths.get(filename)).size
           report.addReportInfo(relPath, fileLOC, parsed = true)
           if (parseResult.errorCount > 0) {
             logger.warn(s"'$relPath' produced ${parseResult.errorCount} syntax error(s); continuing with partial AST")
+            diagnostics.record(filename, parseResult.errorCount)
           }
           Try {
             diffGraph.absorb(new AstCreator(parseResult, config, rflMetadata).createAst())
           } match {
             case Failure(exception) =>
               logger.warn(s"Failed to generate CPG for '$filename'", exception)
+              diagnostics.record(filename, 1)
               (false, relPath)
             case Success(_) =>
               (true, relPath)

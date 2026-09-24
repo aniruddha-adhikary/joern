@@ -38,8 +38,6 @@ trait AstForRules {
     duplicateTaskNames =
       taskDeclNames.groupBy(identity).collect { case (name, occurrences) if occurrences.size > 1 => name }.toSet
 
-    val signatureAst = Option(unit.signatureDecl()).map(astForSignatureDecl)
-
     // Determine container TYPE_DECL: the ruleset name, or the file basename for bare-rule Designer files.
     val (containerName, containerFull) = Option(unit.rulesetDecl()) match {
       case Some(ruleset) =>
@@ -50,6 +48,8 @@ trait AstForRules {
         (base, packageName.map(pkg => s"$pkg.$base").getOrElse(base))
     }
     containerFullName = containerFull
+
+    val signatureAst = Option(unit.signatureDecl()).map(astForSignatureDecl)
 
     val namespaceBlockAst = packageName match {
       case Some(pkg) =>
@@ -75,8 +75,10 @@ trait AstForRules {
 
   /** `public signature S extends X { members }` → TYPE_DECL S with a MEMBER per parameter. */
   private def astForSignatureDecl(ctx: ARLParser.SignatureDeclContext): Ast = {
-    val name       = Option(ctx.Identifier()).map(_.getText).getOrElse("<signature>")
-    val fullName   = packageName.map(pkg => s"$pkg.$name").getOrElse(name)
+    val name     = Option(ctx.Identifier()).map(_.getText).getOrElse("<signature>")
+    val declared = packageName.map(pkg => s"$pkg.$name").getOrElse(name)
+    // `ruleset R (R)`: a signature may share its ruleset's name; TYPE_DECL fullNames must not.
+    val fullName   = if (declared == containerFullName) s"$declared$$signature" else declared
     val superType  = resolveTypeName(Option(ctx.qualifiedName()).map(_.getText).getOrElse(""))
     val headerCode = s"signature $name extends ${Option(ctx.qualifiedName()).map(_.getText).getOrElse("")}"
     signatureFullName = Option(fullName)

@@ -140,9 +140,20 @@ ruleset IlrContext (EngineDataClass){
 
   "a syntactically broken rule" should {
 
-    "still produce a CPG containing the rule METHOD" in {
-      val cpg = code("package x.y; rule Broken { when {} then { insert x } }")
+    "fail the build by default (Gate 1: never silently drop)" in {
+      val ex = intercept[io.joern.arl2cpg.passes.Gate1Violation] {
+        code("package x.y; rule Broken { when {} then { insert x } }").method.l
+      }
+      ex.filesWithSyntaxErrors shouldBe 1
+    }
+
+    "with --allow-unknown still produce a CPG containing the rule METHOD, plus a syntax-error FINDING" in {
+      val cpg =
+        code("package x.y; rule Broken { when {} then { insert x } }").withConfig(Config().withAllowUnknown(true))
       cpg.method.name("Broken").headOption should not be empty
+      val syntax = cpg.finding.filter(f => ArlFindings.code(f) == ArlFindings.Codes.SyntaxError).l
+      syntax.size shouldBe 1
+      ArlFindings.value(syntax.head, ArlFindings.Keys.Filename) should endWith("test.arl")
     }
   }
 

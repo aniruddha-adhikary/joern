@@ -437,6 +437,8 @@ trait AstForExpressions {
         if (text.endsWith("f") || text.endsWith("F")) "float" else "double"
       } else if (Option(ctx.StringLit()).isDefined) {
         "java.lang.String"
+      } else if (Option(ctx.CharLit()).isDefined) {
+        "char"
       } else if (text == "true" || text == "false") {
         "boolean"
       } else {
