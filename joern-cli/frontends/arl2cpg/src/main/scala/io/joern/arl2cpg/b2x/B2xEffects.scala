@@ -23,9 +23,13 @@ import scala.util.Try
   * Every path is relative to `this`; the call site substitutes its receiver, so `this.rejected` written by `rejectWith`
   * becomes `outcome.rejected` at `outcome.rejectWith(...)`.
   *
-  * `opaque` is the honest remainder: methods called on `this` whose own body is nowhere in the mapping. Resolving one
-  * hop and then claiming the call is understood would be worse than not resolving it at all, so the caller keeps an
+  * `opaque` is the honest remainder: methods called on `this` whose own body is nowhere in the mapping, and
+  * non-accessor methods called on a field of `this` (`child.modify`), which may mutate that field's object. Resolving
+  * one hop and then claiming the call is understood would be worse than not resolving it at all, so the caller keeps an
   * unresolved edge naming exactly what is still unknown.
+  *
+  * Accessor-shaped calls (`setX`/`getX`/`isX`) count as an inferred write/read of `x`; if the mapping also holds a body
+  * for the accessor, that body is followed too, so a setter that touches more than its property is not concealed.
   */
 final class B2xEffects private {
   val writes: mutable.LinkedHashSet[String]         = mutable.LinkedHashSet.empty
@@ -56,13 +60,16 @@ final class B2xEffects private {
         inferredWrites ++= facts.inferredWrites.flatMap(B2xEffects.onThis)
         reads ++= facts.reads.flatMap(B2xEffects.onThis)
         inferredReads ++= facts.inferredReads.flatMap(B2xEffects.onThis)
-        facts.callsOnThis.foreach { case (name, arity) =>
-          if (!B2xEffects.isAccessorShaped(name)) {
+        facts.callsOnThis.foreach {
+          case ("this", name, arity) =>
             b2x.candidates(member.businessClass, name, arity) match {
               case single :: Nil if absorb(single, b2x, depth + 1) =>
+              case Nil if B2xEffects.isAccessorShaped(name)        =>
               case _                                               => opaque += name
             }
-          }
+          case (receiverPath, name, _) if !B2xEffects.isAccessorShaped(name) =>
+            B2xEffects.onThis(receiverPath).foreach(path => opaque += s"$path.$name")
+          case _ =>
         }
         inProgress -= member
         true
@@ -134,8 +141,8 @@ object B2xEffects {
     val inferredReads: mutable.LinkedHashSet[String]  = mutable.LinkedHashSet.empty
     val calls: mutable.LinkedHashSet[String]          = mutable.LinkedHashSet.empty
 
-    /** (name, arity) of every call whose receiver is `this` (directly, not through a field). */
-    val callsOnThis: mutable.ListBuffer[(String, Int)] = mutable.ListBuffer.empty
+    /** (receiver path, name, arity) of every call whose receiver is `this` or a path hanging off it (`this.a.b`). */
+    val callsOnThis: mutable.ListBuffer[(String, String, Int)] = mutable.ListBuffer.empty
 
     def walk(node: ParseTree, lhs: Boolean): Unit = {
       node match {
@@ -198,11 +205,11 @@ object B2xEffects {
           if (s.arguments() != null) {
             val arity = arityOf(s.arguments())
             prefix.foreach(receiver => calls += s"$receiver.$name")
-            if (prefix.contains("this")) {
-              callsOnThis += ((name, arity))
-              accessorProperty(name, "set").foreach(prop => inferredWrites += s"this.$prop")
+            prefix.filter(r => r == "this" || r.startsWith("this.")).foreach { receiver =>
+              callsOnThis += ((receiver, name, arity))
+              accessorProperty(name, "set").foreach(prop => inferredWrites += s"$receiver.$prop")
               accessorProperty(name, "get").orElse(accessorProperty(name, "is")).foreach { prop =>
-                inferredReads += s"this.$prop"
+                inferredReads += s"$receiver.$prop"
               }
             }
             prefix = None
