@@ -8,6 +8,7 @@ import scopt.OParser
   */
 final case class Config(
   xomSrcPaths: Set[String] = Set.empty,
+  rflSrcPaths: Set[String] = Set.empty,
   override val genericConfig: X2CpgConfig.GenericConfig = X2CpgConfig.GenericConfig()
 ) extends X2CpgConfig[Config] {
 
@@ -15,6 +16,8 @@ final case class Config(
     copy(genericConfig = value)
 
   def withXomSrcPaths(paths: Set[String]): Config = copy(xomSrcPaths = paths)
+
+  def withRflSrcPaths(paths: Set[String]): Config = copy(rflSrcPaths = paths)
 }
 
 private object Frontend {
@@ -29,6 +32,14 @@ private object Frontend {
         .text(
           "path to Java sources of the eXecution Object Model (XOM). Repeatable. The Java sources are " +
             "imported into the same CPG and ARL calls are linked against them."
+        ),
+      opt[String]("rfl-src")
+        .unbounded()
+        .action((rflPath, config) => config.copy(rflSrcPaths = config.rflSrcPaths + rflPath))
+        .text(
+          "path to ODM ruleflow metadata (.rfl files, searched recursively). Repeatable. The metadata " +
+            "disambiguates flow tasks that share a visible name by scoping their fullName with the " +
+            "ruleflow uuid."
         )
     )
   }
