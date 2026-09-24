@@ -11,6 +11,7 @@ import io.shiftleft.codepropertygraph.generated.{
   Operators
 }
 import org.antlr.v4.runtime.ParserRuleContext
+import org.antlr.v4.runtime.misc.Interval
 import org.antlr.v4.runtime.tree.TerminalNode
 
 import scala.collection.mutable
@@ -22,8 +23,9 @@ trait AstForFlow {
 
   /** `ruleflow F($p) { maintask T; }` → METHOD F whose body calls task T. */
   protected def astForRuleflow(ctx: ARLParser.RuleflowDeclContext): Ast = {
-    val name     = nameOf(ctx.flowId(0))
-    val fullName = s"$containerFullName.$name:void()"
+    val name = nameOf(ctx.flowId(0))
+    // `.ruleflow.` infix avoids colliding with a maintask flowtask of the same name.
+    val fullName = s"$containerFullName.ruleflow.$name:void()"
     valueScope.push(mutable.Map.empty)
 
     val method = methodNode(
@@ -272,15 +274,26 @@ trait AstForFlow {
     }
   }
 
-  /** `call task: A > B;` → CALL to the last part B. */
+  /** `call task: flow > task;` → CALL to the full `flow>task` name, whitespace preserved per part. */
   private def astForCallTask(ctx: ARLParser.CallTaskContext): Ast = {
-    val parts = ctx.taskRef().taskNamePart().asScala.toList.map(part => part.getText)
-    val last  = parts.lastOption.getOrElse(ctx.taskRef().getText)
-    val call  = callNode(
+    // taskNamePart is `taskWord+`, so getText would collapse internal whitespace
+    // (`probe subflow` → `probesubflow`); slice the original text from the char stream.
+    val parts = ctx.taskRef().taskNamePart().asScala.toList.map { part =>
+      Option(part.getStart)
+        .flatMap(start => Option(start.getInputStream))
+        .map(input =>
+          input
+            .getText(Interval.of(part.getStart.getStartIndex, part.getStop.getStopIndex))
+            .trim
+        )
+        .getOrElse(part.getText.trim)
+    }
+    val taskName = if (parts.nonEmpty) parts.mkString(">") else ctx.taskRef().getText.trim
+    val call     = callNode(
       ctx,
       code(ctx),
-      last,
-      s"$containerFullName.$last:void()",
+      taskName,
+      s"$containerFullName.$taskName:void()",
       DispatchTypes.STATIC_DISPATCH,
       Option("void()"),
       Option("void")
