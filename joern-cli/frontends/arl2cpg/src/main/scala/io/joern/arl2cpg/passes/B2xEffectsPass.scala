@@ -12,6 +12,7 @@ import io.shiftleft.codepropertygraph.generated.{
   EdgeTypes,
   EvaluationStrategies,
   NodeTypes,
+  Operators,
   PropertyNames
 }
 import io.shiftleft.passes.CpgPass
@@ -83,8 +84,9 @@ class B2xEffectsPass(cpg: Cpg, b2x: Option[B2xModel]) extends CpgPass(cpg) {
     */
   private def isRulesetData(receiver: Expression): Boolean = receiver match {
     case id: Identifier => id.name == "this" || id.refsTo.nonEmpty || id.typeFullName != Defines.Any
-    case call: Call     => call.argument.headOption.exists(isRulesetData)
-    case _              => false
+    case call: Call if call.name == Operators.cast => call.argument(2).exists(isRulesetData)
+    case call: Call                                => call.argument.headOption.exists(isRulesetData)
+    case _                                         => false
   }
 
   private def effects(
