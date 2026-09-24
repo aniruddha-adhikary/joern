@@ -32,7 +32,7 @@ trait AstForRules {
     val (containerName, containerFull) = Option(unit.rulesetDecl()) match {
       case Some(ruleset) =>
         val name = ruleset.Identifier(0).getText
-        (name, name)
+        (name, packageName.map(pkg => s"$pkg.$name").getOrElse(name))
       case None =>
         val base = Paths.get(parseResult.filename).getFileName.toString.stripSuffix(".arl")
         (base, packageName.map(pkg => s"$pkg.$base").getOrElse(base))
@@ -64,7 +64,7 @@ trait AstForRules {
   /** `public signature S extends X { members }` → TYPE_DECL S with a MEMBER per parameter. */
   private def astForSignatureDecl(ctx: ARLParser.SignatureDeclContext): Ast = {
     val name       = Option(ctx.Identifier()).map(_.getText).getOrElse("<signature>")
-    val fullName   = name
+    val fullName   = packageName.map(pkg => s"$pkg.$name").getOrElse(name)
     val superType  = resolveTypeName(Option(ctx.qualifiedName()).map(_.getText).getOrElse(""))
     val headerCode = s"signature $name extends ${Option(ctx.qualifiedName()).map(_.getText).getOrElse("")}"
     signatureFullName = Option(fullName)
