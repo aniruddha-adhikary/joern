@@ -3,7 +3,16 @@ package io.joern.arl2cpg.b2x
 import io.joern.arl2cpg.parser.{ARLLexer, ARLParser}
 import org.antlr.v4.runtime.atn.PredictionMode
 import org.antlr.v4.runtime.tree.{ParseTree, TerminalNode}
-import org.antlr.v4.runtime.{BailErrorStrategy, CharStreams, CommonTokenStream}
+import org.antlr.v4.runtime.misc.ParseCancellationException
+import org.antlr.v4.runtime.{
+  BailErrorStrategy,
+  BaseErrorListener,
+  CharStreams,
+  CommonTokenStream,
+  RecognitionException,
+  Recognizer,
+  Token
+}
 
 import scala.collection.mutable
 import scala.jdk.CollectionConverters.*
@@ -28,15 +37,18 @@ final class B2xEffects private {
   /** Bodies that went into this result, outermost first. */
   val resolvedThrough: mutable.ListBuffer[B2xMember] = mutable.ListBuffer.empty
 
+  private val inProgress: mutable.Set[B2xMember] = mutable.Set.empty
+
   private def absorb(member: B2xMember, b2x: B2xModel, depth: Int): Boolean = {
-    if (depth >= B2xEffects.MaxDepth || resolvedThrough.contains(member)) {
+    if (depth >= B2xEffects.MaxDepth || inProgress.contains(member)) {
       opaque += member.name
       return true
     }
     B2xEffects.parseBody(member.body) match {
       case None        => false
       case Some(block) =>
-        resolvedThrough += member
+        inProgress += member
+        if (!resolvedThrough.contains(member)) resolvedThrough += member
         val facts = new B2xEffects.BodyFacts
         facts.walk(block, lhs = false)
         facts.reads --= facts.calls
@@ -52,6 +64,7 @@ final class B2xEffects private {
             }
           }
         }
+        inProgress -= member
         true
     }
   }
@@ -92,12 +105,26 @@ object B2xEffects {
   private[b2x] def parseBody(body: String): Option[ARLParser.BlockContext] = Try {
     val lexer = new ARLLexer(CharStreams.fromString(s"{\n$body\n}"))
     lexer.removeErrorListeners()
+    lexer.addErrorListener(BailLexerErrorListener)
     val parser = new ARLParser(new CommonTokenStream(lexer))
     parser.removeErrorListeners()
     parser.getInterpreter.setPredictionMode(PredictionMode.SLL)
     parser.setErrorHandler(new BailErrorStrategy())
-    parser.block()
+    val block = parser.block()
+    if (parser.getCurrentToken.getType != Token.EOF) throw new ParseCancellationException("trailing input")
+    block
   }.toOption
+
+  private object BailLexerErrorListener extends BaseErrorListener {
+    override def syntaxError(
+      recognizer: Recognizer[?, ?],
+      offendingSymbol: Any,
+      line: Int,
+      charPositionInLine: Int,
+      msg: String,
+      e: RecognitionException
+    ): Unit = throw new ParseCancellationException(msg)
+  }
 
   /** Syntactic facts of one body: written paths, read paths, accessor-shaped inferred effects and calls on `this`. */
   private[b2x] class BodyFacts {
