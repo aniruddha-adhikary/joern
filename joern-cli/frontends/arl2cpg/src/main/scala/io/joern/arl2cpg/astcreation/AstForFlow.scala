@@ -113,7 +113,7 @@ trait AstForFlow {
   private def astForFlowtask(ctx: ARLParser.FlowtaskDeclContext): Ast = {
     val name = nameOf(ctx.flowId())
     valueScope.push(mutable.Map.empty)
-    val scope     = taskScopeFor(name, callTaskIds(ctx))
+    val scope     = taskScopeFor(name, callTaskTargets(ctx))
     val prevScope = currentTaskScope
     currentTaskScope = scope
     val method    = flowMethodNode(ctx, name, uuidSuffix = scopedSuffix(name, scope))
@@ -144,7 +144,7 @@ trait AstForFlow {
   private def astForFunctiontask(ctx: ARLParser.FunctiontaskDeclContext): Ast = {
     val name = nameOf(ctx.flowId())
     valueScope.push(mutable.Map.empty)
-    val scope     = taskScopeFor(name, callTaskIds(ctx))
+    val scope     = taskScopeFor(name, callTaskTargets(ctx))
     val prevScope = currentTaskScope
     currentTaskScope = scope
     val method  = flowMethodNode(ctx, name, uuidSuffix = scopedSuffix(name, scope))
@@ -190,22 +190,55 @@ trait AstForFlow {
   /** The task identifier of a (possibly `flow>`-qualified) task name: its last `>` segment. */
   private def taskIdOf(name: String): String = name.split('>').last.trim
 
-  /** All `call task:` target ids referenced anywhere inside a declaration subtree. */
-  private def callTaskIds(ctx: ParserRuleContext): Set[String] =
+  /** All `call task:` target names (`flow>task` when qualified) referenced anywhere inside a declaration subtree. */
+  private def callTaskTargets(ctx: ParserRuleContext): Set[String] =
     childrenOf(ctx).flatMap {
-      case callCtx: ARLParser.CallTaskContext => List(taskIdOf(taskRefName(callCtx.taskRef())))
+      case callCtx: ARLParser.CallTaskContext => List(taskRefName(callCtx.taskRef()))
       case _: TerminalNode                    => List.empty
-      case child: ParserRuleContext           => callTaskIds(child).toList
+      case child: ParserRuleContext           => callTaskTargets(child).toList
       case _                                  => List.empty
     }.toSet
 
-  /** Scope candidates for a task declaration: ruleflows whose task list contains its id (or full name), refined to
-    * those that also contain every `call task` target referenced in its body. Unique → scoped.
+  /** Whether `meta` can contain a call to `target`: the target id is one of its tasks, it lives in a flow referenced by
+    * `meta`'s subflow edges, or `target` is qualified `F>X` and a ruleflow named `F` declares `X`.
     */
-  private def taskScopeFor(name: String, calledIds: Set[String]): Option[RuleflowMeta] = {
-    val id      = taskIdOf(name)
-    val byId    = rflMeta.filter(meta => meta.taskIds.contains(id) || meta.taskIds.contains(name))
-    val refined = if (calledIds.isEmpty) byId else byId.filter(meta => calledIds.forall(meta.taskIds.contains))
+  private def callAcceptable(meta: RuleflowMeta, target: String): Boolean = {
+    val id = taskIdOf(target)
+    meta.taskIds.contains(id) || meta.taskIds.contains(target) ||
+    meta.subflowTargets.values.toList
+      .flatMap(targetUuid => rflMeta.find(subMeta => subMeta.uuid == targetUuid))
+      .exists(subMeta => subMeta.taskIds.contains(id) || subMeta.taskIds.contains(target)) ||
+    qualifiedScope(target).isDefined
+  }
+
+  /** For a `F>X` target/declared name: the unique ruleflow named `F` (everything before the last `>`) that contains
+    * `X`; None when `target` is unqualified or no unique match exists.
+    */
+  private def qualifiedScope(target: String): Option[RuleflowMeta] = {
+    val sep = target.lastIndexOf('>')
+    if (sep < 0) None
+    else {
+      val prefix  = target.take(sep).trim
+      val id      = taskIdOf(target)
+      val matches =
+        rflMeta.filter(meta => meta.name == prefix && (meta.taskIds.contains(id) || meta.taskIds.contains(target)))
+      if (matches.size == 1) Option(matches.head) else None
+    }
+  }
+
+  /** Scope candidates for a task declaration: ruleflows whose task list contains its id (or full name), refined to
+    * those that also contain every `call task` target referenced in its body. Unique → scoped. A `flow>task` qualified
+    * name is only scoped to a ruleflow of that flow's name; it never falls back to bare-id matching.
+    */
+  private def taskScopeFor(name: String, calledTargets: Set[String]): Option[RuleflowMeta] = {
+    val id   = taskIdOf(name)
+    val byId =
+      if (name.contains('>')) {
+        qualifiedScope(name).toList
+      } else {
+        rflMeta.filter(meta => meta.taskIds.contains(id) || meta.taskIds.contains(name))
+      }
+    val refined = byId.filter(meta => calledTargets.forall(target => callAcceptable(meta, target)))
     if (refined.size == 1) Option(refined.head) else None
   }
 
@@ -233,7 +266,7 @@ trait AstForFlow {
   private def astForRuletask(ctx: ARLParser.RuletaskDeclContext): Ast = {
     val name = nameOf(ctx.flowId())
     valueScope.push(mutable.Map.empty)
-    val scope     = taskScopeFor(name, callTaskIds(ctx))
+    val scope     = taskScopeFor(name, callTaskTargets(ctx))
     val prevScope = currentTaskScope
     currentTaskScope = scope
     val method    = flowMethodNode(ctx, name, uuidSuffix = scopedSuffix(name, scope))
@@ -332,17 +365,18 @@ trait AstForFlow {
       .map(_.getText)
       .orElse(Option(ctx.BacktickId()).map(backtick => stripBackticks(backtick.getText)))
       .getOrElse("selected")
-    val varType = typeFullName(ctx.`type`())
-    val selName = s"$taskName$$select"
-    val selSig  = s"boolean($varType)"
-    val selFull = s"$containerFullName.$selName${scopedSuffix(taskName, currentTaskScope)}:$selSig"
+    val varType   = typeFullName(ctx.`type`())
+    val selName   = s"$taskName$$select"
+    val selSig    = s"boolean($varType)"
+    val selSuffix = scopedSuffix(taskName, currentTaskScope)
+    val selFull   = s"$containerFullName.$selName$selSuffix:$selSig"
 
     val outerThis = thisParam
     valueScope.push(mutable.Map.empty)
     val varParam =
       parameterInNode(ctx, varName, varName, 1, isVariadic = false, EvaluationStrategies.BY_REFERENCE, varType)
     declareValue(varName, varType, varParam)
-    val method = flowMethodNode(ctx, selName, signature = selSig, fullNameSuffix = selSig)
+    val method = flowMethodNode(ctx, selName, signature = selSig, fullNameSuffix = selSig, uuidSuffix = selSuffix)
     val params = Seq(thisParamAst(ctx), Ast(varParam))
     val body   = blockAst(blockNode(ctx), blockChildrenAsts(ctx.block()))
     val selAst = methodAst(method, params, body, methodReturnNode(ctx, "boolean"))
@@ -422,17 +456,22 @@ trait AstForFlow {
     * name (deliberately unresolved rather than guessed).
     */
   private def resolvedCallFullName(taskName: String): String = {
+    val duplicated =
+      duplicateTaskNames.contains(taskName) || duplicateTaskNames.contains(taskIdOf(taskName))
     val uuidSuffix = currentTaskScope match {
-      case Some(scope) if duplicateTaskNames.contains(taskName) =>
+      case Some(scope) if duplicated =>
         val id = taskIdOf(taskName)
-        if (scope.taskIds.contains(id) || scope.taskIds.contains(taskName)) {
-          s"@${scope.uuid}"
-        } else {
-          scope.subflowTargets.values.toList
-            .flatMap(targetUuid => rflMeta.find(meta => meta.uuid == targetUuid))
-            .find(meta => meta.taskIds.contains(id) || meta.taskIds.contains(taskName))
-            .map(meta => s"@${meta.uuid}")
-            .getOrElse("")
+        // An explicit `flow>task` qualifier pins the target flow before scope-membership is consulted.
+        qualifiedScope(taskName).map(meta => s"@${meta.uuid}").getOrElse {
+          if (scope.taskIds.contains(id) || scope.taskIds.contains(taskName)) {
+            s"@${scope.uuid}"
+          } else {
+            scope.subflowTargets.values.toList
+              .flatMap(targetUuid => rflMeta.find(meta => meta.uuid == targetUuid))
+              .find(meta => meta.taskIds.contains(id) || meta.taskIds.contains(taskName))
+              .map(meta => s"@${meta.uuid}")
+              .getOrElse("")
+          }
         }
       case _ => ""
     }
