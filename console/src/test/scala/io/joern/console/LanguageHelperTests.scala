@@ -2,6 +2,7 @@ package io.joern.console
 
 import io.shiftleft.codepropertygraph.generated.Languages
 import io.joern.console.cpgcreation.{LlvmCpgGenerator, guessLanguage}
+import io.joern.x2cpg.frontendspecific.arl2cpg
 import io.shiftleft.semanticcpg.utils.FileUtil.*
 import io.shiftleft.semanticcpg.utils.FileUtil
 import org.scalatest.matchers.should.Matchers
@@ -72,6 +73,14 @@ class LanguageHelperTests extends AnyWordSpec with Matchers {
         val subdir = Files.createDirectory(tmpDir / "subdir")
         (subdir / "main.rs").createWithParentsIfNotExists()
         guessLanguage(tmpDir.toString) shouldBe Some(Languages.RUST)
+      }
+    }
+
+    "guess `ODMARL` for a directory containing `.arl`" in {
+      FileUtil.usingTemporaryDirectory("oculartests") { tmpDir =>
+        val subdir = Files.createDirectory(tmpDir / "subdir")
+        (subdir / "rules.arl").createWithParentsIfNotExists()
+        guessLanguage(tmpDir.toString) shouldBe Some(arl2cpg.Language)
       }
     }
 

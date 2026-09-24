@@ -1,0 +1,44 @@
+// A deliberately tiny ruleset whose every read and call can be listed by hand, so the
+// cross-check fixtures beside it (xcheck.rulesetinfo.json, xcheck.signature.xml) are reviewable
+// rather than copied out of the tool's own output.
+public signature XSig extends ilog.rules.engine.IlrSignature {
+    public in com.acme.Order order = null;
+    public out com.acme.Result result = null;
+}
+
+ruleset X (XSig) {
+
+    rule `sales.total` {
+        ilog.rules.business_name = "Total"
+        ilog.rules.package_name = "sales"
+        ilog.rules.dt = ""
+        then {
+            result.total = order.amount * 2;
+        }
+    }
+
+    rule `sales.approve` {
+        ilog.rules.business_name = "Approve"
+        ilog.rules.package_name = "sales"
+        ilog.rules.dt = ""
+        then {
+            result.approve("ok");
+        }
+    }
+}
+
+ruleflow XFlow ($xflow) {
+    maintask MainTask;
+}
+
+flowtask MainTask ($xflow) {
+    {
+        call task: Sell;
+    }
+}
+
+ruletask Sell (XSig) {
+    ordering : literal;
+    criteria : all;
+    rules : sales.*;
+}

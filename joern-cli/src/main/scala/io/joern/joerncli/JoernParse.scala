@@ -107,6 +107,7 @@ object JoernParse {
     val s = new mutable.StringBuilder()
     s ++= "Available languages (case insensitive):\n"
     s ++= Languages.ALL.asScala.map(lang => s"- ${lang.toLowerCase}").mkString("\n")
+    s ++= s"\n- odmarl"
     s.toString()
   }
 

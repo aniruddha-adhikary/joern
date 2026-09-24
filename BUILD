@@ -46,6 +46,11 @@ alias(
 )
 
 alias(
+    name = "arl2cpg",
+    actual = "//joern-cli/frontends/arl2cpg:arl2cpg-bin",
+)
+
+alias(
     name = "swiftsrc2cpg",
     actual = "//joern-cli/frontends/swiftsrc2cpg:swiftsrc2cpg-bin",
 )

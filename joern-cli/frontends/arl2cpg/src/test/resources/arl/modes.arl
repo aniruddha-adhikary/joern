@@ -1,0 +1,989 @@
+import com.ibm.rules.engine.ruledef.runtime.Rule;
+import com.ibm.rules.engine.runtime.RunningEngineWithWorkingMemory;
+import ilog.rules.brl.System;
+import java.lang.Integer;
+import java.lang.Object;
+import java.lang.String;
+import loan.Borrower;
+import loan.LoanRequest;
+import loan.LoanUtil;
+import loan.Report;
+public signature EngineDataClass extends com.ibm.rules.engine.runtime.impl.AbstractEngineData {
+  public in Borrower borrower = null;
+  public out String grade = "";
+  public in LoanRequest loan = null;
+  public out Report report = null;
+  public out Integer score = null;
+}
+
+ruleset IlrContext (EngineDataClass){
+  
+  rule `computation.bankruptcyScore` {
+    ilog.rules.business_name = "bankruptcyScore"
+    ilog.rules.dt = "computation.bankruptcyScore"
+    ilog.rules.package_name = "computation"
+    status = "new"
+    when {
+      Borrower() from borrower;
+      evaluate ( borrower.hasLatestBankrupcy());
+    }
+    match many {
+      case ([0,1].contains(borrower.getBankruptcyAge())) : then 1{
+        score = Integer.valueOf((int)(score.intValue() + -200));
+        updateEngineData;
+        updateGenerators;
+      }
+      case ([2,5].contains(borrower.getBankruptcyAge())) : then 2{
+        score = Integer.valueOf((int)(score.intValue() + -100));
+        updateEngineData;
+        updateGenerators;
+      }
+      case ([6,8].contains(borrower.getBankruptcyAge())) : then 3{
+        score = Integer.valueOf((int)(score.intValue() + -50));
+        updateEngineData;
+        updateGenerators;
+      }
+      default : then 4{
+        score = Integer.valueOf((int)(score.intValue() + -10));
+        updateEngineData;
+        updateGenerators;
+      }
+    }
+  }
+  
+  rule `computation.initialCorporateScore` {
+    property priority = 1000000;
+    ilog.rules.business_name = "initialCorporateScore"
+    ilog.rules.dt = ""
+    ilog.rules.package_name = "computation"
+    status = "new"
+    then {
+      score = Integer.valueOf((int)borrower.creditScore);
+      updateEngineData;
+      updateGenerators;
+    }
+  }
+  
+  rule `computation.neverBankruptcy` {
+    ilog.rules.business_name = "neverBankruptcy"
+    ilog.rules.dt = ""
+    ilog.rules.package_name = "computation"
+    status = "new"
+    when {
+      Borrower() from borrower;
+      evaluate ( ! borrower.hasLatestBankrupcy());
+    }
+    then {
+      score = Integer.valueOf((int)(score.intValue() + 20));
+      updateEngineData;
+      updateGenerators;
+    }
+  }
+  
+  rule `computation.rate` {
+    ilog.rules.business_name = "rate"
+    ilog.rules.dt = "computation.rate"
+    ilog.rules.package_name = "computation"
+    status = "new"
+    match many {
+      case (loan != null && loan.duration < 5) : match many {
+        case (loan != null && [((double)0),0.7[.contains(loan.loanToValue)) : then 1{
+          report.yearlyInterestRate = 0.05;
+        }
+        case (loan != null && [0.7,0.8[.contains(loan.loanToValue)) : then 2{
+          report.yearlyInterestRate = 0.052;
+        }
+        case (loan != null && [0.8,0.9[.contains(loan.loanToValue)) : then 3{
+          report.yearlyInterestRate = 0.053;
+        }
+        case (loan != null && loan.loanToValue >= 0.9) : then 4{
+          report.yearlyInterestRate = 0.055;
+        }
+      }
+      case (loan != null && [5,8].contains(loan.duration)) : match many {
+        case (loan != null && [((double)0),0.7[.contains(loan.loanToValue)) : then 5{
+          report.yearlyInterestRate = 0.056;
+        }
+        case (loan != null && [0.7,0.8[.contains(loan.loanToValue)) : then 6{
+          report.yearlyInterestRate = 0.057;
+        }
+        case (loan != null && [0.8,0.9[.contains(loan.loanToValue)) : then 7{
+          report.yearlyInterestRate = 0.058;
+        }
+        case (loan != null && loan.loanToValue >= 0.9) : then 8{
+          report.yearlyInterestRate = 0.059;
+        }
+      }
+      case (loan != null && [9,12].contains(loan.duration)) : match many {
+        case (loan != null && [((double)0),0.7[.contains(loan.loanToValue)) : then 9{
+          report.yearlyInterestRate = 0.06;
+        }
+        case (loan != null && [0.7,0.8[.contains(loan.loanToValue)) : then 10{
+          report.yearlyInterestRate = 0.061;
+        }
+        case (loan != null && [0.8,0.9[.contains(loan.loanToValue)) : then 11{
+          report.yearlyInterestRate = 0.062;
+        }
+        case (loan != null && loan.loanToValue >= 0.9) : then 12{
+          report.yearlyInterestRate = 0.063;
+        }
+      }
+      case (loan != null && [13,17].contains(loan.duration)) : match many {
+        case (loan != null && [((double)0),0.7[.contains(loan.loanToValue)) : then 13{
+          report.yearlyInterestRate = 0.064;
+        }
+        case (loan != null && [0.7,0.8[.contains(loan.loanToValue)) : then 14{
+          report.yearlyInterestRate = 0.065;
+        }
+        case (loan != null && [0.8,0.9[.contains(loan.loanToValue)) : then 15{
+          report.yearlyInterestRate = 0.066;
+        }
+        case (loan != null && loan.loanToValue >= 0.9) : then 16{
+          report.yearlyInterestRate = 0.067;
+        }
+      }
+      case (loan != null && [18,25].contains(loan.duration)) : match many {
+        case (loan != null && [((double)0),0.7[.contains(loan.loanToValue)) : then 17{
+          report.yearlyInterestRate = 0.068;
+        }
+        case (loan != null && [0.7,0.8[.contains(loan.loanToValue)) : then 18{
+          report.yearlyInterestRate = 0.069;
+        }
+        case (loan != null && [0.8,0.9[.contains(loan.loanToValue)) : then 19{
+          report.yearlyInterestRate = 0.07;
+        }
+        case (loan != null && loan.loanToValue >= 0.9) : then 20{
+          report.yearlyInterestRate = 0.08;
+        }
+      }
+      case (loan != null && loan.duration >= 26) : match many {
+        case (loan != null && [((double)0),0.7[.contains(loan.loanToValue)) : then 21{
+          report.yearlyInterestRate = 0.081;
+        }
+        case (loan != null && [0.7,0.8[.contains(loan.loanToValue)) : then 22{
+          report.yearlyInterestRate = 0.082;
+        }
+        case (loan != null && [0.8,0.9[.contains(loan.loanToValue)) : then 23{
+          report.yearlyInterestRate = 0.083;
+        }
+        case (loan != null && loan.loanToValue >= 0.9) : then 24{
+          report.yearlyInterestRate = 0.085;
+        }
+      }
+    }
+  }
+  
+  rule `computation.repayment` {
+    property priority = -1000000;
+    ilog.rules.business_name = "repayment"
+    ilog.rules.dt = ""
+    ilog.rules.package_name = "computation"
+    status = "deployable"
+    when {
+      Report() from report;
+      LoanRequest() from loan;
+      evaluate ( amount : loan.amount);
+      evaluate ( duration : loan.numberOfMonthlyPayments);
+      evaluate ( rate : report.yearlyInterestRate);
+    }
+    then {
+      report.monthlyRepayment = LoanUtil.getMonthlyRepayment((double)amount, duration, rate);
+      System.printMessage("monthly repayment calculated.");
+    }
+  }
+  
+  rule `computation.salary2score` {
+    ilog.rules.business_name = "salary2score"
+    ilog.rules.dt = "computation.salary2score"
+    ilog.rules.package_name = "computation"
+    status = "new"
+    match many {
+      case (borrower != null && borrower.yearlyIncome < 10000) : then 1{
+        score = Integer.valueOf((int)(score.intValue() + 21));
+        updateEngineData;
+        updateGenerators;
+      }
+      case (borrower != null && [10000,20000[.contains(borrower.yearlyIncome)) : then 2{
+        score = Integer.valueOf((int)(score.intValue() + 50));
+        updateEngineData;
+        updateGenerators;
+      }
+      case (borrower != null && [20000,30000[.contains(borrower.yearlyIncome)) : then 3{
+        score = Integer.valueOf((int)(score.intValue() + 80));
+        updateEngineData;
+        updateGenerators;
+      }
+      case (borrower != null && [30000,50000[.contains(borrower.yearlyIncome)) : then 4{
+        score = Integer.valueOf((int)(score.intValue() + 120));
+        updateEngineData;
+        updateGenerators;
+      }
+      case (borrower != null && [50000,80000[.contains(borrower.yearlyIncome)) : then 5{
+        score = Integer.valueOf((int)(score.intValue() + 150));
+        updateEngineData;
+        updateGenerators;
+      }
+      case (borrower != null && [80000,120000[.contains(borrower.yearlyIncome)) : then 6{
+        score = Integer.valueOf((int)(score.intValue() + 200));
+        updateEngineData;
+        updateGenerators;
+      }
+      case (borrower != null && [120000,200000[.contains(borrower.yearlyIncome)) : then 7{
+        score = Integer.valueOf((int)(score.intValue() + 250));
+        updateEngineData;
+        updateGenerators;
+      }
+      case (borrower != null && borrower.yearlyIncome >= 200000) : then 8{
+        score = Integer.valueOf((int)(score.intValue() + 300));
+        updateEngineData;
+        updateGenerators;
+      }
+    }
+  }
+  
+  rule `eligibility.approval` {
+    property priority = -1000000;
+    ilog.rules.business_name = "approval"
+    ilog.rules.dt = ""
+    ilog.rules.package_name = "eligibility"
+    status = "new"
+    when {
+      Report() from report;
+    }
+    if (report.approved && new String[]{"A", "B", "C"}.contains(grade)){
+      then {
+        report.approveLoan("Congratulations! Your loan has been approved");
+        updateEngineData;
+        updateGenerators;
+      }
+    }
+    else {
+      then {
+        report.rejectLoan("We are sorry. Your loan has not been approved");
+        updateEngineData;
+        updateGenerators;
+      }
+    }
+  }
+  
+  rule `eligibility.checkCreditScore` {
+    ilog.rules.business_name = "checkCreditScore"
+    ilog.rules.dt = ""
+    ilog.rules.package_name = "eligibility"
+    status = "new"
+    when {
+      Borrower() from borrower;
+      evaluate ( `minimum score` : 200);
+      evaluate ( borrower.creditScore < `minimum score`);
+    }
+    then {
+      report.rejectLoan("Credit score below " + `minimum score`);
+      updateEngineData;
+      updateGenerators;
+    }
+  }
+  
+  rule `eligibility.checkIncome` {
+    ilog.rules.business_name = "checkIncome"
+    ilog.rules.dt = ""
+    ilog.rules.package_name = "eligibility"
+    status = "new"
+    when {
+      Report() from report;
+      Borrower() from borrower;
+      evaluate ( `minimum income` : 0.37 * (double)borrower.yearlyIncome);
+      evaluate ( report.yearlyRepayment >= `minimum income`);
+    }
+    then {
+      report.rejectLoan("Too big Debt/Income ratio: " + LoanUtil.formattedAmount(report.yearlyRepayment / (double)borrower.yearlyIncome));
+      updateEngineData;
+      updateGenerators;
+    }
+  }
+  
+  rule `eligibility.grade` {
+    property priority = 1000000;
+    ilog.rules.business_name = "grade"
+    ilog.rules.dt = "eligibility.grade"
+    ilog.rules.package_name = "eligibility"
+    status = "new"
+    match many {
+      case (report != null && [((double)0),((double)10000)[.contains(report.yearlyRepayment)) : match many {
+        case (score.intValue() >= 900) : then 1{
+          grade = "A";
+          report.addMessage("Very low risk loan");
+          updateEngineData;
+          updateGenerators;
+        }
+        case ([600,900[.contains(score.intValue())) : then 2{
+          grade = "A";
+          report.addMessage("Very low risk loan");
+          updateEngineData;
+          updateGenerators;
+        }
+        case ([300,600[.contains(score.intValue())) : then 3{
+          grade = "B";
+          report.addMessage("Low risk loan");
+          updateEngineData;
+          updateGenerators;
+        }
+      }
+      case (report != null && [((double)10000),((double)30000)[.contains(report.yearlyRepayment)) : match many {
+        case (score.intValue() >= 900) : then 4{
+          grade = "A";
+          report.addMessage("Very low risk loan");
+          updateEngineData;
+          updateGenerators;
+        }
+        case ([600,900[.contains(score.intValue())) : then 5{
+          grade = "B";
+          report.addMessage("Low risk loan");
+          updateEngineData;
+          updateGenerators;
+        }
+        case ([300,600[.contains(score.intValue())) : then 6{
+          grade = "C";
+          report.addMessage("Average risk loan");
+          updateEngineData;
+          updateGenerators;
+        }
+      }
+      case (report != null && [((double)30000),((double)60000)[.contains(report.yearlyRepayment)) : match many {
+        case (score.intValue() >= 900) : then 7{
+          grade = "B";
+          report.addMessage("Low risk loan");
+          updateEngineData;
+          updateGenerators;
+        }
+        case ([600,900[.contains(score.intValue())) : then 8{
+          grade = "C";
+          report.addMessage("Average risk loan");
+          updateEngineData;
+          updateGenerators;
+        }
+        case ([300,600[.contains(score.intValue())) : then 9{
+          grade = "D";
+          report.addMessage("Risky loan");
+          updateEngineData;
+          updateGenerators;
+        }
+      }
+      case (report != null && report.yearlyRepayment >= (double)60000) : match many {
+        case (score.intValue() >= 900) : then 10{
+          grade = "C";
+          report.addMessage("Average risk loan");
+          updateEngineData;
+          updateGenerators;
+        }
+        case ([600,900[.contains(score.intValue())) : then 11{
+          grade = "D";
+          report.addMessage("Risky loan");
+          updateEngineData;
+          updateGenerators;
+        }
+        case ([300,600[.contains(score.intValue())) : then 12{
+          grade = "E";
+          report.addMessage("Very risky loan");
+          updateEngineData;
+          updateGenerators;
+        }
+      }
+    }
+  }
+  
+  rule `insurance.defaultInsurance` {
+    property priority = -1000000;
+    ilog.rules.business_name = "defaultInsurance"
+    ilog.rules.dt = ""
+    ilog.rules.package_name = "insurance"
+    status = "validated"
+    then {
+      report.insuranceRequired = true;
+      report.insuranceRate = 0.02;
+    }
+  }
+  
+  rule `insurance.insurance` {
+    ilog.rules.business_name = "insurance"
+    ilog.rules.dt = "insurance.insurance"
+    ilog.rules.package_name = "insurance"
+    status = "validated"
+    when {
+      evaluate ( ! (grade == null || grade.length() == 0));
+    }
+    match many {
+      case (grade.equals("A")) : match many {
+        case (loan != null && loan.amount < 100000) : then 1{
+          report.insuranceRequired = false;
+        }
+        case (loan != null && [100000,300000[.contains(loan.amount)) : then 2{
+          report.insuranceRequired = true;
+          report.insuranceRate = 0.001;
+        }
+        case (loan != null && [300000,600000[.contains(loan.amount)) : then 3{
+          report.insuranceRequired = true;
+          report.insuranceRate = 0.003;
+        }
+        case (loan != null && loan.amount >= 600000) : then 4{
+          report.insuranceRequired = true;
+          report.insuranceRate = 0.005;
+        }
+      }
+      case (grade.equals("B")) : match many {
+        case (loan != null && loan.amount < 100000) : then 5{
+          report.insuranceRequired = false;
+        }
+        case (loan != null && [100000,300000[.contains(loan.amount)) : then 6{
+          report.insuranceRequired = true;
+          report.insuranceRate = 0.0025;
+        }
+        case (loan != null && [300000,600000[.contains(loan.amount)) : then 7{
+          report.insuranceRequired = true;
+          report.insuranceRate = 0.005;
+        }
+        case (loan != null && loan.amount >= 600000) : then 8{
+          report.insuranceRequired = true;
+          report.insuranceRate = 0.0075;
+        }
+      }
+      case (grade.equals("C")) : match many {
+        case (loan != null && loan.amount < 100000) : then 9{
+          report.insuranceRequired = true;
+          report.insuranceRate = 0.0035;
+        }
+        case (loan != null && [100000,300000[.contains(loan.amount)) : then 10{
+          report.insuranceRequired = true;
+          report.insuranceRate = 0.006;
+        }
+        case (loan != null && [300000,600000[.contains(loan.amount)) : then 11{
+          report.insuranceRequired = true;
+          report.insuranceRate = 0.0085;
+        }
+        case (loan != null && loan.amount >= 600000) : then 12{
+          report.insuranceRequired = true;
+          report.insuranceRate = 0.0145;
+        }
+      }
+    }
+  }
+  
+  rule `insurance.unvalidated action rule` {
+    ilog.rules.business_name = "unvalidated action rule"
+    ilog.rules.dt = ""
+    ilog.rules.package_name = "insurance"
+    status = "new"
+    then {
+      System.printMessage("unvalidated rule called");
+    }
+  }
+  
+  rule `validation.borrower.checkAge` {
+    ilog.rules.business_name = "checkAge"
+    ilog.rules.dt = ""
+    ilog.rules.package_name = "validation.borrower"
+    status = "new"
+    when {
+      Borrower() from borrower;
+      evaluate ( minAge : 0);
+      evaluate ( maxAge : 150);
+    }
+    if (! [minAge,maxAge].contains(borrower.age)){
+      then {
+        report.rejectData("The borrower's age is not valid.");
+        System.printMessage("rejected with message The borrower's age is not valid.");
+      }
+    }
+    else {
+      then {
+        System.printMessage("The borrower's age is valid.");
+      }
+    }
+  }
+  
+  rule `validation.borrower.checkName` {
+    ilog.rules.business_name = "checkName"
+    ilog.rules.dt = ""
+    ilog.rules.package_name = "validation.borrower"
+    status = "new"
+    when {
+      Borrower() from borrower;
+    }
+    if (borrower.lastName == null || borrower.lastName.length() == 0){
+      then {
+        report.rejectData("The borrower's name is empty");
+        System.printMessage("rejected with message The borrower's name is empty");
+      }
+    }
+    else {
+      then {
+        System.printMessage("The borrower's name is not empty.");
+      }
+    }
+  }
+  
+  rule `validation.borrower.checkSSNareanumber` {
+    ilog.rules.business_name = "checkSSNareanumber"
+    ilog.rules.dt = ""
+    ilog.rules.package_name = "validation.borrower"
+    status = "new"
+    when {
+      Borrower() from borrower;
+    }
+    if (new String[]{"000", "666"}.contains(borrower.ssn.areaNumber)){
+      then {
+        report.rejectData("The borrower's SSN area number cannot be " + borrower.ssn.areaNumber);
+        System.printMessage("rejected with The borrower's SSN area number cannot be " + borrower.ssn.areaNumber);
+      }
+    }
+    else {
+      then {
+        System.printMessage("The borrower's SSN area number belongs to an authorized area.");
+      }
+    }
+  }
+  
+  rule `validation.borrower.checkSSNdigits` {
+    ilog.rules.business_name = "checkSSNdigits"
+    ilog.rules.dt = ""
+    ilog.rules.package_name = "validation.borrower"
+    status = "new"
+    when {
+      Borrower() from borrower;
+      evaluate ( digits : 9);
+      evaluate ( areanumber : 3);
+      evaluate ( groupcode : 2);
+      evaluate ( serialnumber : 4);
+    }
+    if ((((((borrower.ssn.digits != digits || borrower.ssn.areaNumber.length() != areanumber) || ! LoanUtil.containsOnlyDigits(borrower.ssn.areaNumber)) || borrower.ssn.groupCode.length() != groupcode) || ! LoanUtil.containsOnlyDigits(borrower.ssn.groupCode)) || borrower.ssn.serialNumber.length() != serialnumber) || ! LoanUtil.containsOnlyDigits(borrower.ssn.serialNumber)){
+      then {
+        report.rejectData("The borrower's SSN should be formatted with 3-2-4 digits");
+        System.printMessage("rejected with message The borrower's SSN should be formatted with 3-2-4 digits");
+      }
+    }
+    else {
+      then {
+        System.printMessage("The borrower's SSN is well formatted.");
+      }
+    }
+  }
+  
+  rule `validation.borrower.checkZipcode` {
+    ilog.rules.business_name = "checkZipcode"
+    ilog.rules.dt = ""
+    ilog.rules.package_name = "validation.borrower"
+    status = "new"
+    when {
+      Borrower() from borrower;
+      evaluate ( `zip length` : 5);
+    }
+    if (borrower.zipCode == null || borrower.zipCode.length() != `zip length`){
+      then {
+        report.rejectData(("The borrower's Zip Code should have " + `zip length`) + " digits");
+        System.printMessage(("rejected with message The borrower's Zip Code should have " + `zip length`) + " digits");
+      }
+    }
+    else {
+      then {
+        System.printMessage("The borrower's Zip Code is valid.");
+      }
+    }
+  }
+  
+  rule `validation.loan.checkAmount` {
+    ilog.rules.business_name = "checkAmount"
+    ilog.rules.dt = ""
+    ilog.rules.package_name = "validation.loan"
+    status = "new"
+    when {
+      LoanRequest() from loan;
+      evaluate ( maxAmount : 1000000);
+      evaluate ( loan.amount >= maxAmount);
+    }
+    then {
+      report.rejectData("The loan cannot exceed " + maxAmount);
+    }
+  }
+}
+ruleflow `probe modes`($EngineData){
+  maintask `probe modes`;
+}
+flowtask computationFlow($EngineData){
+  {
+    call task : computationFlow>initResult;
+    call task : computationFlow>computation;
+  }
+  final {
+    System.printMessage("Score: " + $EngineData.this.score);
+  }
+}
+ruletask `computationFlow>computation`(rete){
+  ordering : DYNAMIC;
+  criteria : ALL_RULES;
+  rules : computation.*;
+}
+functiontask `computationFlow>initResult`{
+  {
+    $EngineData.this.report = new Report($EngineData.this.borrower, $EngineData.this.loan);
+    $EngineData.this.report.approved = true;
+  }
+}
+flowtask eligibilityFlow($EngineData){
+  initial {
+    System.printMessage("Computing eligibility for score: " + $EngineData.this.score);
+  }
+  {
+    call task : eligibilityFlow>initResult;
+    call task : eligibilityFlow>eligibility;
+  }
+  final {
+    com.ibm.rules.engine.ruleflow.runtime.RunningRuleflowEngine.this.note($EngineData.this.borrower.toString());
+    com.ibm.rules.engine.ruleflow.runtime.RunningRuleflowEngine.this.note($EngineData.this.loan.toString());
+    com.ibm.rules.engine.ruleflow.runtime.RunningRuleflowEngine.this.note($EngineData.this.report.toString());
+  }
+}
+ruletask `eligibilityFlow>eligibility`(fastpath){
+  ordering : SORTED;
+  criteria : ALL_RULES;
+  rules : eligibility.*;
+}
+functiontask `eligibilityFlow>initResult`{
+  {
+    $EngineData.this.report = new Report($EngineData.this.borrower, $EngineData.this.loan);
+    $EngineData.this.report.approved = true;
+  }
+}
+flowtask loanvalidation($EngineData){
+  {
+    call task : loanvalidation>initResult;
+    call task : loanvalidation>validation;
+    if ($EngineData.this.report.validData) {
+      call task : loanvalidation>computation;
+      call task : loanvalidation>eligibility;
+      if ($EngineData.this.report.approved) {
+        call task : loanvalidation>insurance;
+      }
+      
+    }
+    
+  }
+  final {
+    com.ibm.rules.engine.ruleflow.runtime.RunningRuleflowEngine.this.note($EngineData.this.borrower.toString());
+    com.ibm.rules.engine.ruleflow.runtime.RunningRuleflowEngine.this.note($EngineData.this.loan.toString());
+    com.ibm.rules.engine.ruleflow.runtime.RunningRuleflowEngine.this.note($EngineData.this.report.toString());
+  }
+}
+ruletask `loanvalidation>computation`(rete){
+  ordering : DYNAMIC;
+  criteria : ALL_RULES;
+  rules : computation.*;
+}
+ruletask `loanvalidation>eligibility`(rete){
+  ordering : DYNAMIC;
+  criteria : ALL_RULES;
+  rules : eligibility.*;
+}
+functiontask `loanvalidation>initResult`{
+  {
+    $EngineData.this.report = new Report($EngineData.this.borrower, $EngineData.this.loan);
+    $EngineData.this.report.approved = true;
+  }
+}
+ruletask `loanvalidation>insurance`(rete){
+  ordering : DYNAMIC;
+  criteria : ALL_RULES;
+  rules : insurance.*;
+}
+ruletask `loanvalidation>validation`(rete){
+  ordering : DYNAMIC;
+  criteria : ALL_RULES;
+  rules : validation.*, validation.borrower.*, validation.loan.*;
+}
+flowtask `probe branch`($EngineData){
+  {
+    call task : probe branch>init;
+    if ($EngineData.this.report.validData) {
+      call task : probe branch>hi;
+    }
+     else {
+      call task : probe branch>lo;
+    }
+    
+  }
+}
+ruletask `probe branch>hi`(rete){
+  ordering : DYNAMIC;
+  criteria : ALL_RULES;
+  rules : computation.*;
+}
+functiontask `probe branch>init`{
+  {
+    $EngineData.this.report = new Report($EngineData.this.borrower, $EngineData.this.loan);
+    $EngineData.this.report.approved = true;
+  }
+}
+ruletask `probe branch>lo`(rete){
+  ordering : DYNAMIC;
+  criteria : ALL_RULES;
+  rules : insurance.*;
+}
+flowtask `probe forkjoin`($EngineData){
+  {
+    call task : probe forkjoin>init;
+    fork {
+      call task : probe forkjoin>branchA;
+    }
+    && {
+      call task : probe forkjoin>branchB;
+    }
+    
+  }
+}
+ruletask `probe forkjoin>branchA`(rete){
+  ordering : DYNAMIC;
+  criteria : ALL_RULES;
+  rules : computation.*;
+}
+ruletask `probe forkjoin>branchB`(rete){
+  ordering : DYNAMIC;
+  criteria : ALL_RULES;
+  rules : validation.*, validation.borrower.*, validation.loan.*;
+}
+functiontask `probe forkjoin>init`{
+  {
+    $EngineData.this.report = new Report($EngineData.this.borrower, $EngineData.this.loan);
+    $EngineData.this.report.approved = true;
+  }
+}
+flowtask `probe loop`($EngineData){
+  {
+    call task : probe loop>init;
+    label_0 : {
+      call task : probe loop>body;
+      call task : probe loop>bump;
+      if ($EngineData.this.score.intValue() < 3) {
+        goto label_0;
+      }
+      
+    }
+    
+  }
+}
+ruletask `probe loop>body`(rete){
+  ordering : DYNAMIC;
+  criteria : ALL_RULES;
+  rules : computation.*;
+}
+functiontask `probe loop>bump`{
+  {
+    $EngineData.this.score = Integer.valueOf($EngineData.this.score.intValue() + 1);
+  }
+}
+functiontask `probe loop>init`{
+  {
+    $EngineData.this.report = new Report($EngineData.this.borrower, $EngineData.this.loan);
+    $EngineData.this.report.approved = true;
+    $EngineData.this.score = Integer.valueOf(0);
+  }
+}
+flowtask `probe modes`($EngineData){
+  {
+    call task : probe modes>init;
+    call task : probe modes>t_RetePlus_Default_None;
+    call task : probe modes>t_RetePlus_Default_Rule;
+    call task : probe modes>t_RetePlus_Default_RuleInstance;
+    call task : probe modes>t_RetePlus_Literal_None;
+    call task : probe modes>t_RetePlus_Literal_Rule;
+    call task : probe modes>t_RetePlus_Literal_RuleInstance;
+    call task : probe modes>t_RetePlus_Priority_None;
+    call task : probe modes>t_RetePlus_Priority_Rule;
+    call task : probe modes>t_RetePlus_Priority_RuleInstance;
+    call task : probe modes>t_Sequential_Default_None;
+    call task : probe modes>t_Sequential_Default_Rule;
+    call task : probe modes>t_Sequential_Default_RuleInstance;
+    call task : probe modes>t_Sequential_Literal_None;
+    call task : probe modes>t_Sequential_Literal_Rule;
+    call task : probe modes>t_Sequential_Literal_RuleInstance;
+    call task : probe modes>t_Sequential_Priority_None;
+    call task : probe modes>t_Sequential_Priority_Rule;
+    call task : probe modes>t_Sequential_Priority_RuleInstance;
+    call task : probe modes>t_Fastpath_Default_None;
+    call task : probe modes>t_Fastpath_Default_Rule;
+    call task : probe modes>t_Fastpath_Default_RuleInstance;
+    call task : probe modes>t_Fastpath_Literal_None;
+    call task : probe modes>t_Fastpath_Literal_Rule;
+    call task : probe modes>t_Fastpath_Literal_RuleInstance;
+    call task : probe modes>t_Fastpath_Priority_None;
+    call task : probe modes>t_Fastpath_Priority_Rule;
+    call task : probe modes>t_Fastpath_Priority_RuleInstance;
+  }
+}
+functiontask `probe modes>init`{
+  {
+    $EngineData.this.report = new Report($EngineData.this.borrower, $EngineData.this.loan);
+    $EngineData.this.report.approved = true;
+  }
+}
+ruletask `probe modes>t_Fastpath_Default_None`(fastpath){
+  ordering : SORTED;
+  criteria : ALL_RULES;
+  rules : computation.*;
+}
+ruletask `probe modes>t_Fastpath_Default_Rule`(fastpath){
+  ordering : SORTED;
+  criteria : FIRST_ELIGIBLE_RULE;
+  rules : computation.*;
+}
+ruletask `probe modes>t_Fastpath_Default_RuleInstance`(fastpath){
+  ordering : SORTED;
+  limit : 1;
+  criteria : ALL_RULES;
+  rules : computation.*;
+}
+ruletask `probe modes>t_Fastpath_Literal_None`(fastpath){
+  ordering : LITERAL;
+  criteria : ALL_RULES;
+  rules : computation.*;
+}
+ruletask `probe modes>t_Fastpath_Literal_Rule`(fastpath){
+  ordering : LITERAL;
+  criteria : FIRST_ELIGIBLE_RULE;
+  rules : computation.*;
+}
+ruletask `probe modes>t_Fastpath_Literal_RuleInstance`(fastpath){
+  ordering : LITERAL;
+  limit : 1;
+  criteria : ALL_RULES;
+  rules : computation.*;
+}
+ruletask `probe modes>t_Fastpath_Priority_None`(fastpath){
+  ordering : SORTED;
+  criteria : ALL_RULES;
+  rules : computation.*;
+}
+ruletask `probe modes>t_Fastpath_Priority_Rule`(fastpath){
+  ordering : SORTED;
+  criteria : FIRST_ELIGIBLE_RULE;
+  rules : computation.*;
+}
+ruletask `probe modes>t_Fastpath_Priority_RuleInstance`(fastpath){
+  ordering : SORTED;
+  limit : 1;
+  criteria : ALL_RULES;
+  rules : computation.*;
+}
+ruletask `probe modes>t_RetePlus_Default_None`(rete){
+  ordering : DYNAMIC;
+  criteria : ALL_RULES;
+  rules : computation.*;
+}
+ruletask `probe modes>t_RetePlus_Default_Rule`(rete){
+  ordering : DYNAMIC;
+  criteria : FIRST_ELIGIBLE_RULE;
+  rules : computation.*;
+}
+ruletask `probe modes>t_RetePlus_Default_RuleInstance`(rete){
+  ordering : DYNAMIC;
+  limit : 1;
+  criteria : ALL_RULES;
+  rules : computation.*;
+}
+ruletask `probe modes>t_RetePlus_Literal_None`(rete){
+  ordering : LITERAL;
+  criteria : ALL_RULES;
+  rules : computation.*;
+}
+ruletask `probe modes>t_RetePlus_Literal_Rule`(rete){
+  ordering : LITERAL;
+  criteria : FIRST_ELIGIBLE_RULE;
+  rules : computation.*;
+}
+ruletask `probe modes>t_RetePlus_Literal_RuleInstance`(rete){
+  ordering : LITERAL;
+  limit : 1;
+  criteria : ALL_RULES;
+  rules : computation.*;
+}
+ruletask `probe modes>t_RetePlus_Priority_None`(rete){
+  ordering : SORTED;
+  criteria : ALL_RULES;
+  rules : computation.*;
+}
+ruletask `probe modes>t_RetePlus_Priority_Rule`(rete){
+  ordering : SORTED;
+  criteria : FIRST_ELIGIBLE_RULE;
+  rules : computation.*;
+}
+ruletask `probe modes>t_RetePlus_Priority_RuleInstance`(rete){
+  ordering : SORTED;
+  limit : 1;
+  criteria : ALL_RULES;
+  rules : computation.*;
+}
+ruletask `probe modes>t_Sequential_Default_None`(sequential){
+  ordering : SORTED;
+  criteria : ALL_RULES;
+  rules : computation.*;
+}
+ruletask `probe modes>t_Sequential_Default_Rule`(sequential){
+  ordering : SORTED;
+  criteria : FIRST_ELIGIBLE_RULE;
+  rules : computation.*;
+}
+ruletask `probe modes>t_Sequential_Default_RuleInstance`(sequential){
+  ordering : SORTED;
+  limit : 1;
+  criteria : ALL_RULES;
+  rules : computation.*;
+}
+ruletask `probe modes>t_Sequential_Literal_None`(sequential){
+  ordering : LITERAL;
+  criteria : ALL_RULES;
+  rules : computation.*;
+}
+ruletask `probe modes>t_Sequential_Literal_Rule`(sequential){
+  ordering : LITERAL;
+  criteria : FIRST_ELIGIBLE_RULE;
+  rules : computation.*;
+}
+ruletask `probe modes>t_Sequential_Literal_RuleInstance`(sequential){
+  ordering : LITERAL;
+  limit : 1;
+  criteria : ALL_RULES;
+  rules : computation.*;
+}
+ruletask `probe modes>t_Sequential_Priority_None`(sequential){
+  ordering : SORTED;
+  criteria : ALL_RULES;
+  rules : computation.*;
+}
+ruletask `probe modes>t_Sequential_Priority_Rule`(sequential){
+  ordering : SORTED;
+  criteria : FIRST_ELIGIBLE_RULE;
+  rules : computation.*;
+}
+ruletask `probe modes>t_Sequential_Priority_RuleInstance`(sequential){
+  ordering : SORTED;
+  limit : 1;
+  criteria : ALL_RULES;
+  rules : computation.*;
+}
+flowtask `probe select`($EngineData){
+  {
+    call task : probe select>init;
+    call task : probe select>dyn;
+  }
+}
+ruletask `probe select>dyn`(rete){
+  ordering : DYNAMIC;
+  criteria : ALL_RULES;
+  rules : computation.*;
+  select (Rule `rule`) {
+    return ((String)`rule`.properties.get("ruleExecutionName")).contains("score");
+  }
+}
+functiontask `probe select>init`{
+  {
+    $EngineData.this.report = new Report($EngineData.this.borrower, $EngineData.this.loan);
+    $EngineData.this.report.approved = true;
+  }
+}
