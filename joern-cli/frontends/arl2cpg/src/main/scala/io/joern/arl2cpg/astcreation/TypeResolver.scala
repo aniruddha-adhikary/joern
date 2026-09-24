@@ -82,7 +82,7 @@ trait TypeResolver {
 
   /** The individual segments of a qualifiedName (`id` contexts, terminals elsewhere). */
   protected def qualifiedNameSegments(qn: ARLParser.QualifiedNameContext): List[String] =
-    qn.children.asScala.toList
+    childrenOf(qn)
       .filter(child => child.isInstanceOf[ARLParser.IdContext] || child.getText != ".")
       .map(child => stripBackticks(child.getText))
       .filter(_.nonEmpty)

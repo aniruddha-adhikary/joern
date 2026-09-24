@@ -18,17 +18,17 @@ trait AstForExpressions {
     case e: ARLParser.ExpressionContext => astForExpression(e.assignment())
     case e: ARLParser.AssignmentContext => astForAssignment(e)
     case e: ARLParser.TernaryContext    => astForTernary(e)
-    case e: ARLParser.LogicalOrContext => astForBinaryChain(e, e.logicalAnd().asScala.toList, e.children.asScala.toList)
-    case e: ARLParser.LogicalAndContext => astForBinaryChain(e, e.equality().asScala.toList, e.children.asScala.toList)
-    case e: ARLParser.EqualityContext => astForBinaryChain(e, e.relational().asScala.toList, e.children.asScala.toList)
+    case e: ARLParser.LogicalOrContext  => astForBinaryChain(e, e.logicalAnd().asScala.toList, childrenOf(e))
+    case e: ARLParser.LogicalAndContext => astForBinaryChain(e, e.equality().asScala.toList, childrenOf(e))
+    case e: ARLParser.EqualityContext   => astForBinaryChain(e, e.relational().asScala.toList, childrenOf(e))
     case e: ARLParser.RelationalContext => astForRelational(e)
     case e: ARLParser.AdditiveContext   =>
-      astForBinaryChain(e, e.multiplicative().asScala.toList, e.children.asScala.toList)
-    case e: ARLParser.MultiplicativeContext => astForBinaryChain(e, e.unary().asScala.toList, e.children.asScala.toList)
-    case e: ARLParser.UnaryContext          => astForUnary(e)
-    case e: ARLParser.CastExprContext       => astForCast(e)
-    case e: ARLParser.PostfixContext        => astForPostfix(e)
-    case e: ARLParser.PrimaryContext        => astForPrimary(e)
+      astForBinaryChain(e, e.multiplicative().asScala.toList, childrenOf(e))
+    case e: ARLParser.MultiplicativeContext  => astForBinaryChain(e, e.unary().asScala.toList, childrenOf(e))
+    case e: ARLParser.UnaryContext           => astForUnary(e)
+    case e: ARLParser.CastExprContext        => astForCast(e)
+    case e: ARLParser.PostfixContext         => astForPostfix(e)
+    case e: ARLParser.PrimaryContext         => astForPrimary(e)
     case e: ARLParser.IntervalLiteralContext => astForInterval(e)
     case e: ARLParser.LiteralContext         => astForLiteral(e)
     case _                                   => unknownAst(ctx)
@@ -42,7 +42,7 @@ trait AstForExpressions {
     val lhs = astForExpression(ctx.ternary())
     Option(ctx.assignment()) match {
       case Some(rhsCtx) =>
-        val opText = ctx.children.asScala.toList.collectFirst { case t: TerminalNode => t.getText }.getOrElse("=")
+        val opText = childrenOf(ctx).collectFirst { case t: TerminalNode => t.getText }.getOrElse("=")
         val op     = opText match {
           case "="  => Operators.assignment
           case "+=" => Operators.assignmentPlus
@@ -91,7 +91,7 @@ trait AstForExpressions {
 
   private def astForBinaryChain(ctx: ParserRuleContext, operands: List[ParserRuleContext], children: List[Any]): Ast = {
     if (operands.size == 1) return astForExpression(operands.head)
-    val opTokens = ctx.children.asScala.toList.collect { case t: TerminalNode => t.getText }
+    val opTokens = childrenOf(ctx).collect { case t: TerminalNode => t.getText }
     operands.tail.zip(opTokens).foldLeft(astForExpression(operands.head)) { (acc, pair) =>
       val (operandCtx, opTok) = pair
       val rhs                 = astForExpression(operandCtx)
@@ -105,7 +105,7 @@ trait AstForExpressions {
   private def astForRelational(ctx: ARLParser.RelationalContext): Ast = {
     val operands = ctx.additive().asScala.toList
     if (operands.size == 1) return astForExpression(operands.head)
-    val opTokens = ctx.children.asScala.toList.collect { case t: TerminalNode => t.getText }
+    val opTokens = childrenOf(ctx).collect { case t: TerminalNode => t.getText }
     operands.tail.zip(opTokens).foldLeft(astForExpression(operands.head)) { (acc, pair) =>
       val (operandCtx, opTok) = pair
       opTok match {
@@ -131,7 +131,7 @@ trait AstForExpressions {
   // ------------------------------------------------------------------
 
   private def astForUnary(ctx: ARLParser.UnaryContext): Ast = {
-    ctx.children.asScala.headOption match {
+    childrenOf(ctx).headOption match {
       case Some(t: TerminalNode) =>
         val op = t.getText match {
           case "!" => Operators.logicalNot
@@ -166,7 +166,7 @@ trait AstForExpressions {
     val primaryCtx = ctx.primary()
     var acc        = astForPrimary(primaryCtx)
     // Suffixes after the primary: selector or arrayAccess children interleaved with '.' tokens.
-    ctx.children.asScala.toList.drop(1).foreach {
+    childrenOf(ctx).drop(1).foreach {
       case t: TerminalNode              => () // '.' separators
       case s: ARLParser.SelectorContext =>
         acc = astForSelector(s, acc)
@@ -181,7 +181,7 @@ trait AstForExpressions {
 
   /** `.id` / `.id(args)` / `.`id`` / `.this` after a base expression. */
   private def astForSelector(ctx: ARLParser.SelectorContext, base: Ast): Ast = {
-    val nameText = ctx.children.asScala.toList
+    val nameText = childrenOf(ctx)
       .collectFirst {
         case i: ARLParser.IdContext => i.getText
         case t: TerminalNode        => t.getText
@@ -216,7 +216,7 @@ trait AstForExpressions {
   // ------------------------------------------------------------------
 
   private def astForPrimary(ctx: ARLParser.PrimaryContext): Ast = {
-    ctx.children.asScala.headOption match {
+    childrenOf(ctx).headOption match {
       case Some(l: ARLParser.LiteralContext)         => astForLiteral(l)
       case Some(i: ARLParser.IntervalLiteralContext) => astForInterval(i)
       case Some(t: TerminalNode)                     =>

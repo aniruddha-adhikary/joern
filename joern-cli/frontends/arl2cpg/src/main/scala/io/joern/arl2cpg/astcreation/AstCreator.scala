@@ -7,7 +7,7 @@ import io.shiftleft.codepropertygraph.generated.nodes.*
 import io.shiftleft.codepropertygraph.generated.{DiffGraphBuilder, DispatchTypes, EvaluationStrategies, NodeTypes}
 import io.shiftleft.semanticcpg.language.types.structure.NamespaceTraversal
 import org.antlr.v4.runtime.ParserRuleContext
-import org.antlr.v4.runtime.tree.TerminalNode
+import org.antlr.v4.runtime.tree.{ParseTree, TerminalNode}
 
 import java.nio.file.Paths
 import scala.collection.mutable
@@ -58,7 +58,10 @@ class AstCreator(val parseResult: ArlParseResult, val config: Config)(implicit w
   protected var containerFullName: String = ""
 
   override def createAst(): DiffGraphBuilder = {
-    val ast = astForCompilationUnit(compilationUnit)
+    // A total parse failure can leave `compilationUnit` null; still emit the FILE node.
+    val ast = Option(compilationUnit)
+      .map(astForCompilationUnit)
+      .getOrElse(Ast(NewFile().name(parseResult.filename).order(1)))
     Ast.storeInDiffGraph(ast, diffGraph)
     diffGraph
   }
@@ -101,9 +104,11 @@ class AstCreator(val parseResult: ArlParseResult, val config: Config)(implicit w
 
   protected def textOf(ctx: ParserRuleContext): String = code(ctx)
 
-  protected def nameOf(ruleName: ARLParser.RuleNameContext): String = stripBackticks(ruleName.getText)
+  protected def nameOf(ruleName: ARLParser.RuleNameContext): String =
+    Option(ruleName).map(rn => stripBackticks(rn.getText)).getOrElse("<rule>")
 
-  protected def nameOf(flowId: ARLParser.FlowIdContext): String = stripBackticks(flowId.getText)
+  protected def nameOf(flowId: ARLParser.FlowIdContext): String =
+    Option(flowId).map(id => stripBackticks(id.getText)).getOrElse("<task>")
 
   protected def thisParamType: String = signatureFullName.getOrElse(containerFullName)
 
@@ -154,11 +159,15 @@ class AstCreator(val parseResult: ArlParseResult, val config: Config)(implicit w
   protected def unresolvedMethodFullName(namespace: String, name: String, argCount: Int): String =
     s"$namespace.$name:${Defines.UnresolvedSignature}($argCount)"
 
+  /** Children of a context; empty when ANTLR error recovery leaves `children` unset. */
+  protected def childrenOf(ctx: ParserRuleContext): List[ParseTree] =
+    Option(ctx).flatMap(ruleCtx => Option(ruleCtx.children)).map(_.asScala.toList).getOrElse(Nil)
+
   /** Children of a context that are themselves parser contexts, in order. */
   protected def ruleChildren(ctx: ParserRuleContext): List[ParserRuleContext] =
-    ctx.children.asScala.toList.collect { case c: ParserRuleContext => c }
+    childrenOf(ctx).collect { case c: ParserRuleContext => c }
 
   /** Terminal children text of a context (e.g. keywords). */
   protected def terminalTexts(ctx: ParserRuleContext): List[String] =
-    ctx.children.asScala.toList.collect { case t: TerminalNode => t.getText }
+    childrenOf(ctx).collect { case t: TerminalNode => t.getText }
 }

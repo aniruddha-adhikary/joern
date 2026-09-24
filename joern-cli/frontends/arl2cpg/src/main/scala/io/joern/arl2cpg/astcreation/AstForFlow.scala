@@ -69,7 +69,7 @@ trait AstForFlow {
   }
 
   protected def astForFlowElement(ctx: ARLParser.FlowElementContext): List[Ast] = {
-    ctx.children.asScala.headOption match {
+    childrenOf(ctx).headOption match {
       case Some(f: ARLParser.FlowtaskDeclContext)     => List(astForFlowtask(f))
       case Some(r: ARLParser.RuletaskDeclContext)     => List(astForRuletask(r))
       case Some(f: ARLParser.FunctiontaskDeclContext) => List(astForFunctiontask(f))
@@ -170,7 +170,7 @@ trait AstForFlow {
     }.toList
 
     val propAnnotations = ctx.ruletaskProperty().asScala.toList.map { prop =>
-      val propName = prop.children.asScala.headOption.map(_.getText).getOrElse("property")
+      val propName = childrenOf(prop).headOption.map(_.getText).getOrElse("property")
       val valueAst = Option(prop.expression())
         .map(astForExpression)
         .getOrElse(Ast(annotationLiteralNode(prop, Option(prop.Identifier()).map(_.getText).getOrElse(prop.getText))))
@@ -261,7 +261,7 @@ trait AstForFlow {
     ctx.flowStatement().asScala.toList.flatMap(astsForFlowStatement)
 
   protected def astsForFlowStatement(ctx: ARLParser.FlowStatementContext): List[Ast] = {
-    ctx.children.asScala.headOption match {
+    childrenOf(ctx).headOption match {
       case Some(c: ARLParser.CallTaskContext)     => List(astForCallTask(c))
       case Some(i: ARLParser.FlowIfContext)       => List(astForFlowIf(i))
       case Some(f: ARLParser.ForkStmtContext)     => List(astForFork(f))
@@ -312,7 +312,7 @@ trait AstForFlow {
 
   /** `L: {…}` → BLOCK with code `L:`. */
   private def astForLabeledBlock(ctx: ARLParser.LabeledBlockContext): Ast = {
-    val label = ctx.Identifier().getText
+    val label = Option(ctx.Identifier()).map(_.getText).getOrElse("<label>")
     val block = NewBlock()
       .code(s"$label:")
       .typeFullName(Defines.Any)
@@ -323,6 +323,7 @@ trait AstForFlow {
 
   /** `goto L;` → CONTROL_STRUCTURE GOTO. */
   private def astForGoto(ctx: ARLParser.GotoStmtContext): Ast = {
-    gotoAst(ctx, s"goto ${ctx.Identifier().getText}", ctx.Identifier().getText)
+    val label = Option(ctx.Identifier()).map(_.getText).getOrElse("<label>")
+    gotoAst(ctx, s"goto $label", label)
   }
 }

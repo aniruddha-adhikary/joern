@@ -63,10 +63,10 @@ trait AstForRules {
 
   /** `public signature S extends X { members }` → TYPE_DECL S with a MEMBER per parameter. */
   private def astForSignatureDecl(ctx: ARLParser.SignatureDeclContext): Ast = {
-    val name       = ctx.Identifier().getText
+    val name       = Option(ctx.Identifier()).map(_.getText).getOrElse("<signature>")
     val fullName   = name
-    val superType  = resolveTypeName(ctx.qualifiedName().getText)
-    val headerCode = s"signature $name extends ${ctx.qualifiedName().getText}"
+    val superType  = resolveTypeName(Option(ctx.qualifiedName()).map(_.getText).getOrElse(""))
+    val headerCode = s"signature $name extends ${Option(ctx.qualifiedName()).map(_.getText).getOrElse("")}"
     signatureFullName = Option(fullName)
 
     val typeDecl =
@@ -78,10 +78,10 @@ trait AstForRules {
 
   /** `public in Borrower borrower = null;` → MEMBER borrower carrying an ANNOTATION `direction`. */
   private def astForSignatureMember(ctx: ARLParser.SignatureMemberContext): Ast = {
-    val name      = ctx.Identifier().getText
-    val typeName  = typeFullName(ctx.`type`())
+    val name      = Option(ctx.Identifier()).map(_.getText).getOrElse("<member>")
+    val typeName  = Option(ctx.`type`()).map(typeFullName).getOrElse(Defines.Any)
     val direction = Option(ctx.direction())
-      .map(dir => dir.children.asScala.toList.map(_.getText).mkString(" "))
+      .map(dir => childrenOf(dir).map(_.getText).mkString(" "))
       .getOrElse("")
 
     signatureMembers(name) = typeName
@@ -143,7 +143,7 @@ trait AstForRules {
     val name       = nameOf(ctx.ruleName())
     val fullName   = s"$containerFull.$name:void()"
     val signature  = "void()"
-    val methodCode = s"rule ${ctx.ruleName().getText}"
+    val methodCode = s"rule ${Option(ctx.ruleName()).map(_.getText).getOrElse("<rule>")}"
 
     fileRuleNames += name
     valueScope.push(mutable.Map.empty)
@@ -219,14 +219,14 @@ trait AstForRules {
     val expr  = ctx.expression()
     val name  =
       if (texts.contains("property")) {
-        ctx.Identifier().getText
+        Option(ctx.Identifier()).map(_.getText).getOrElse("<property>")
       } else if (texts.take(3) == List("ilog", ".", "rules")) {
-        s"ilog.rules.${ctx.Identifier().getText}"
+        s"ilog.rules.${Option(ctx.Identifier()).map(_.getText).getOrElse("<property>")}"
       } else if (texts.headOption.contains("status")) {
         "status"
       } else {
         // id '=' expression — the id is the first child context.
-        ctx.id().getText
+        Option(ctx.id()).map(_.getText).getOrElse("<property>")
       }
     val valueAst = astForExpression(expr)
     val assign   = annotationAssignmentAst("value", code(ctx), valueAst)
