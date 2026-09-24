@@ -25,7 +25,7 @@ trait AstForWhen {
   }
 
   protected def astsForWhenStatement(ctx: ARLParser.WhenStatementContext): (List[Ast], List[Ast]) = {
-    ctx.children.asScala.headOption match {
+    childrenOf(ctx).headOption match {
       case Some(c: ARLParser.EvaluatePatternContext)  => astsForEvaluate(c)
       case Some(c: ARLParser.WherePatternContext)     => (List.empty, List(astForExpression(c.expression())))
       case Some(c: ARLParser.AggregatePatternContext) => astsForAggregate(c, negated = false)

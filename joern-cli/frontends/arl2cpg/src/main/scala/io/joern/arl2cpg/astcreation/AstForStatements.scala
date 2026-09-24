@@ -23,7 +23,7 @@ trait AstForStatements {
   /** A single statement lowers to zero or more ASTs (a localVarDecl with an initialiser produces LOCAL + assignment).
     */
   protected def astsForStatement(ctx: ARLParser.StatementContext): List[Ast] = {
-    ctx.children.asScala.headOption match {
+    childrenOf(ctx).headOption match {
       case Some(b: ARLParser.BlockContext) => List(astForBlock(b))
       case Some(t: TerminalNode)           =>
         t.getText match {
@@ -48,7 +48,7 @@ trait AstForStatements {
   }
 
   private def astForIfStatement(ctx: ARLParser.StatementContext): Ast = {
-    val condition = astForExpression(ctx.expression())
+    val condition = Option(ctx.expression()).map(astForExpression).getOrElse(unknownAst(ctx))
     val stmts     = ctx.statement().asScala.toList
     val thenAst   = stmts.headOption.map(astsForStatement).getOrElse(List.empty)
     val elseAst   = stmts.drop(1).flatMap(astsForStatement)
@@ -69,16 +69,19 @@ trait AstForStatements {
     val body  = wrapMultipleInBlock(stmts.flatMap(astsForStatement), line(ctx))
     if (Option(ctx.`type`()).isDefined) {
       // enhanced for: for ( type name : expression ) statement
-      val varName = Option(ctx.Identifier()).map(_.getText).getOrElse(ctx.BacktickId().getText)
-      val tName   = typeFullName(ctx.`type`())
-      val local   = localNode(ctx, varName, s"${ctx.`type`().getText} $varName", tName)
+      val varName = Option(ctx.Identifier())
+        .map(_.getText)
+        .orElse(Option(ctx.BacktickId()).map(_.getText))
+        .getOrElse("<unknown>")
+      val tName = typeFullName(ctx.`type`())
+      val local = localNode(ctx, varName, s"${ctx.`type`().getText} $varName", tName)
       declareValue(varName, tName)
       val iterExpr = Option(ctx.expression()).map(astForExpression).getOrElse(unknownAst(ctx))
       forAst(ctx, Seq(Ast(local)), Seq.empty, Seq(iterExpr), Seq.empty, Seq(body))
     } else {
       val initAsts = Option(ctx.forInit()).toList.flatMap { init =>
         Option(init.localVarDecl()).map(astsForLocalVarDecl).getOrElse {
-          init.expressionList().expression().asScala.toList.map(astForExpression)
+          Option(init.expressionList()).toList.flatMap(_.expression().asScala.toList).map(astForExpression)
         }
       }
       // Classic for: children of the header are forInit? ; expression? ; expressionList? — the lone
@@ -90,7 +93,7 @@ trait AstForStatements {
   }
 
   private def astForWhileStatement(ctx: ARLParser.StatementContext): Ast = {
-    val condition = astForExpression(ctx.expression())
+    val condition = Option(ctx.expression()).map(astForExpression).getOrElse(unknownAst(ctx))
     val body      = wrapMultipleInBlock(ctx.statement().asScala.toList.flatMap(astsForStatement), line(ctx))
     whileAst(ctx, Option(condition), Seq(body))
   }
@@ -102,8 +105,8 @@ trait AstForStatements {
 
   /** `T x = e;` → LOCAL x + `x = e` assignment. */
   protected def astsForLocalVarDecl(ctx: ARLParser.LocalVarDeclContext): List[Ast] = {
-    val name  = ctx.Identifier().getText
-    val tName = typeFullName(ctx.`type`())
+    val name  = Option(ctx.Identifier()).map(_.getText).getOrElse("<unknown>")
+    val tName = Option(ctx.`type`()).map(typeFullName).getOrElse(Defines.Any)
     val local = localNode(ctx, name, code(ctx), tName)
     declareValue(name, tName)
     val initAst = Option(ctx.expression()).map { expr =>
@@ -122,7 +125,7 @@ trait AstForStatements {
 
   /** `insert x;` / `retract x;` / `update x;` / `modify x;` → static CALL of that name with x as argument 1. */
   private def astsForKeywordStatement(ctx: ARLParser.StatementContext, keyword: String): List[Ast] = {
-    val exprAst = astForExpression(ctx.expression())
+    val exprAst = Option(ctx.expression()).map(astForExpression).getOrElse(unknownAst(ctx))
     val call    = callNode(
       ctx,
       code(ctx),
@@ -144,7 +147,7 @@ trait AstForStatements {
   // ------------------------------------------------------------------
 
   protected def astForRuleAction(ctx: ARLParser.RuleActionContext): List[Ast] = {
-    ctx.children.asScala.headOption match {
+    childrenOf(ctx).headOption match {
       case Some(t: ARLParser.ThenBlockContext)        => List(astForThenBlock(t))
       case Some(t: ARLParser.ThenNamedBlockContext)   => List(astForThenNamedBlock(t))
       case Some(t: ARLParser.ThenRowContext)          => List(astForThenRow(t))
@@ -160,15 +163,15 @@ trait AstForStatements {
     val actions = ctx.ruleAction().asScala.toList
     // Determine the split point: the number of then-branch actions is unknown from the context alone,
     // so scan the token stream for the 'else' between the two '{' groups. Simpler: '{' positions.
-    val bracePositions = ctx.children.asScala.toList.zipWithIndex.collect {
+    val bracePositions = childrenOf(ctx).zipWithIndex.collect {
       case (t: TerminalNode, i) if t.getText == "{" || t.getText == "}" => (t.getText, i)
     }
     // First '{' opens then-block; matching '}' closes it; if another '{' exists, there is an else.
     val elseIdx =
-      ctx.children.asScala.toList.indexWhere(child => child.isInstanceOf[TerminalNode] && child.getText == "else")
+      childrenOf(ctx).indexWhere(child => child.isInstanceOf[TerminalNode] && child.getText == "else")
     if (elseIdx >= 0) {
       // count then-branch actions = actions whose context ends before the 'else' token's char position
-      val elseTok                    = ctx.children.asScala.toList(elseIdx).asInstanceOf[TerminalNode]
+      val elseTok                    = childrenOf(ctx)(elseIdx).asInstanceOf[TerminalNode]
       val elseCharIx                 = elseTok.getSymbol.getStartIndex
       val (thenActions, elseActions) = actions.partition(action => action.getStart.getStartIndex < elseCharIx)
       ifThenElseAst(
@@ -262,7 +265,7 @@ trait AstForStatements {
 
   /** matchOutcome: thenRow/thenBlock/matchMany/if/…/`when {…} outcome`. */
   protected def astForMatchOutcome(ctx: ARLParser.MatchOutcomeContext): Ast = {
-    ctx.children.asScala.headOption match {
+    childrenOf(ctx).headOption match {
       case Some(t: ARLParser.ThenRowContext)            => astForThenRow(t)
       case Some(t: ARLParser.ThenBlockContext)          => astForThenBlock(t)
       case Some(m: ARLParser.MatchManyContext)          => astForMatchMany(m)
@@ -286,9 +289,9 @@ trait AstForStatements {
   private def astForMatchOutcomeIf(ctx: ARLParser.MatchOutcomeContext): Ast = {
     val outcomes = ctx.matchOutcome().asScala.toList
     val elseIdx  =
-      ctx.children.asScala.toList.indexWhere(child => child.isInstanceOf[TerminalNode] && child.getText == "else")
+      childrenOf(ctx).indexWhere(child => child.isInstanceOf[TerminalNode] && child.getText == "else")
     if (elseIdx >= 0) {
-      val elseCharIx         = ctx.children.asScala.toList(elseIdx).asInstanceOf[TerminalNode].getSymbol.getStartIndex
+      val elseCharIx         = childrenOf(ctx)(elseIdx).asInstanceOf[TerminalNode].getSymbol.getStartIndex
       val (thenOut, elseOut) = outcomes.partition(outcome => outcome.getStart.getStartIndex < elseCharIx)
       ifThenElseAst(
         ctx,
