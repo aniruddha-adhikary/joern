@@ -2,6 +2,7 @@ package io.joern.arl2cpg.passes
 
 import io.joern.arl2cpg.Config
 import io.joern.arl2cpg.astcreation.AstCreator
+import io.joern.arl2cpg.identity.{TaskIdentity, TaskIdentityFile}
 import io.joern.arl2cpg.parser.ArlParserFacade
 import io.joern.arl2cpg.rfl.RflMetadata
 import io.joern.x2cpg.{SourceFiles, ValidationMode}
@@ -12,7 +13,7 @@ import io.shiftleft.passes.ForkJoinParallelCpgPass
 import io.shiftleft.utils.IOUtils
 import org.slf4j.LoggerFactory
 
-import java.nio.file.Paths
+import java.nio.file.{Files, Paths}
 import scala.util.{Failure, Success, Try}
 
 /** Syntax-error counts per file, collected while the AST is built so [[FindingsPass]] can report them. */
@@ -34,7 +35,8 @@ class AstCreationPass(cpg: Cpg, config: Config, diagnostics: ParseDiagnostics = 
   private val logger = LoggerFactory.getLogger(getClass)
   private val report = new Report()
 
-  private val rflMetadata = RflMetadata.load(config.rflSrcPaths.toSeq)
+  private val rflMetadata       = RflMetadata.load(config.rflSrcPaths.toSeq)
+  private val taskIdentityIndex = TaskIdentity.load(config.taskIdentityPaths.toSeq)
 
   private val sourceFiles =
     SourceFiles.determine(
@@ -67,7 +69,13 @@ class AstCreationPass(cpg: Cpg, config: Config, diagnostics: ParseDiagnostics = 
             diagnostics.record(filename, parseResult.errorCount)
           }
           Try {
-            diffGraph.absorb(new AstCreator(parseResult, config, rflMetadata).createAst())
+            val taskIdentity =
+              if (taskIdentityIndex.isEmpty) TaskIdentityFile.empty
+              else {
+                val bytes = Files.readAllBytes(Paths.get(filename))
+                taskIdentityIndex.forFile(Paths.get(filename).getFileName.toString, TaskIdentity.sha256Hex(bytes))
+              }
+            diffGraph.absorb(new AstCreator(parseResult, config, rflMetadata, taskIdentity).createAst())
           } match {
             case Failure(exception) =>
               logger.warn(s"Failed to generate CPG for '$filename'", exception)

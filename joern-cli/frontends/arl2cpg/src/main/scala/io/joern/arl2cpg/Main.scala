@@ -8,6 +8,8 @@ import scopt.OParser
   *
   * @param xomSrcPaths
   *   Java sources of the eXecution Object Model, imported into the same CPG.
+  * @param taskIdentityPaths
+  *   task identity sidecars (JSON lines) tying flattened task declarations to authored ruleflow uuids.
   * @param b2xPath
   *   the archive's BOM-to-XOM mapping (`b2x.b2x`), which holds the bodies of the methods the ARL only calls.
   * @param allowUnknown
@@ -17,6 +19,7 @@ import scopt.OParser
 final case class Config(
   xomSrcPaths: Set[String] = Set.empty,
   rflSrcPaths: Set[String] = Set.empty,
+  taskIdentityPaths: Set[String] = Set.empty,
   b2xPath: Option[String] = None,
   allowUnknown: Boolean = false,
   override val genericConfig: X2CpgConfig.GenericConfig = X2CpgConfig.GenericConfig()
@@ -28,6 +31,8 @@ final case class Config(
   def withXomSrcPaths(paths: Set[String]): Config = copy(xomSrcPaths = paths)
 
   def withRflSrcPaths(paths: Set[String]): Config = copy(rflSrcPaths = paths)
+
+  def withTaskIdentityPaths(paths: Set[String]): Config = copy(taskIdentityPaths = paths)
 
   def withB2xPath(path: String): Config = copy(b2xPath = Option(path))
 
@@ -54,6 +59,14 @@ private object Frontend {
           "path to ODM ruleflow metadata (.rfl files, searched recursively). Repeatable. The metadata " +
             "disambiguates flow tasks that share a visible name by scoping their fullName with the " +
             "ruleflow uuid."
+        ),
+      opt[String]("task-identity")
+        .unbounded()
+        .action((path, config) => config.copy(taskIdentityPaths = config.taskIdentityPaths + path))
+        .text(
+          "path to a task identity sidecar (JSON lines). Repeatable. Each record ties one flattened task " +
+            "declaration (file, line, task) to its authored ruleflow uuid; matched tasks are scoped exactly " +
+            "like --rfl-src and the sidecar wins over .rfl inference."
         ),
       opt[String]("b2x")
         .action((path, config) => config.withB2xPath(path))
