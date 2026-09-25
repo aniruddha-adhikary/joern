@@ -1,6 +1,7 @@
 package io.joern.arl2cpg.astcreation
 
 import io.joern.arl2cpg.Config
+import io.joern.arl2cpg.identity.TaskIdentityFile
 import io.joern.arl2cpg.parser.{ARLParser, ArlParseResult}
 import io.joern.arl2cpg.rfl.RuleflowMeta
 import io.joern.x2cpg.{Ast, AstCreatorBase, Defines, ValidationMode}
@@ -18,9 +19,13 @@ import scala.jdk.CollectionConverters.*
   * AstForRules (signature/ruleset/rule), AstForWhen (Layer B patterns), AstForStatements and AstForExpressions (Layer
   * C), AstForFlow (Layer A ruleflow/tasks) and TypeResolver.
   */
-class AstCreator(val parseResult: ArlParseResult, val config: Config, val rflMeta: List[RuleflowMeta] = List.empty)(
-  implicit withSchemaValidation: ValidationMode
-) extends AstCreatorBase[ParserRuleContext, AstCreator](parseResult.filename)
+class AstCreator(
+  val parseResult: ArlParseResult,
+  val config: Config,
+  val rflMeta: List[RuleflowMeta] = List.empty,
+  val taskIdentity: TaskIdentityFile = TaskIdentityFile.empty
+)(implicit withSchemaValidation: ValidationMode)
+    extends AstCreatorBase[ParserRuleContext, AstCreator](parseResult.filename)
     with AstForRules
     with AstForWhen
     with AstForStatements
