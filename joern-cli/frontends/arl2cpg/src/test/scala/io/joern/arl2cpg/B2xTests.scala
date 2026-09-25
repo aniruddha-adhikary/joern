@@ -37,7 +37,7 @@ class B2xTests extends AnyWordSpec with Matchers with BeforeAndAfterAll {
   }
 
   private lazy val withB2x: Cpg    = build(_.withB2xPath(loanB2x.toString))
-  private lazy val withoutB2x: Cpg = build(identity)
+  private lazy val withoutB2x: Cpg = build(Predef.identity)
 
   override def afterAll(): Unit = {
     withB2x.close()
