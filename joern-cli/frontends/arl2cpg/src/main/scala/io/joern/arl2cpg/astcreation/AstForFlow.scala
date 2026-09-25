@@ -1,6 +1,7 @@
 package io.joern.arl2cpg.astcreation
 
 import io.joern.arl2cpg.ArlOperators
+import io.joern.arl2cpg.identity.{TaskIdentityKey, TaskIdentityRecord}
 import io.joern.arl2cpg.parser.ARLParser
 import io.joern.arl2cpg.rfl.RuleflowMeta
 import io.joern.x2cpg.{Ast, Defines}
@@ -16,6 +17,7 @@ import org.antlr.v4.runtime.ParserRuleContext
 import org.antlr.v4.runtime.misc.Interval
 import org.antlr.v4.runtime.tree.TerminalNode
 
+import java.nio.file.Paths
 import scala.collection.mutable
 import scala.jdk.CollectionConverters.*
 
@@ -113,8 +115,8 @@ trait AstForFlow {
   private def astForFlowtask(ctx: ARLParser.FlowtaskDeclContext): Ast = {
     val name = nameOf(ctx.flowId())
     valueScope.push(mutable.Map.empty)
-    val scope     = taskScopeFor(name, callTaskTargets(ctx))
-    val prevScope = currentTaskScope
+    val (scope, identity) = declScope(ctx, name)
+    val prevScope         = currentTaskScope
     currentTaskScope = scope
     val method    = flowMethodNode(ctx, name, uuidSuffix = scopedSuffix(name, scope))
     val thisAst   = thisParamAst(ctx)
@@ -133,7 +135,7 @@ trait AstForFlow {
       params,
       body,
       methodReturnNode(ctx, "void"),
-      annotations = scopeAnnotationAsts(ctx, name, scope)
+      annotations = scopeAnnotationAsts(ctx, name, scope, identity)
     )
     currentTaskScope = prevScope
     valueScope.pop()
@@ -144,8 +146,8 @@ trait AstForFlow {
   private def astForFunctiontask(ctx: ARLParser.FunctiontaskDeclContext): Ast = {
     val name = nameOf(ctx.flowId())
     valueScope.push(mutable.Map.empty)
-    val scope     = taskScopeFor(name, callTaskTargets(ctx))
-    val prevScope = currentTaskScope
+    val (scope, identity) = declScope(ctx, name)
+    val prevScope         = currentTaskScope
     currentTaskScope = scope
     val method  = flowMethodNode(ctx, name, uuidSuffix = scopedSuffix(name, scope))
     val thisAst = thisParamAst(ctx)
@@ -173,7 +175,7 @@ trait AstForFlow {
       thisAst +: params,
       body,
       methodReturnNode(ctx, "void"),
-      annotations = scopeAnnotationAsts(ctx, name, scope)
+      annotations = scopeAnnotationAsts(ctx, name, scope, identity)
     )
     currentTaskScope = prevScope
     valueScope.pop()
@@ -248,7 +250,7 @@ trait AstForFlow {
 
   private def scopeState(name: String, scope: Option[RuleflowMeta]): String =
     if (scope.isDefined) "resolved"
-    else if (duplicateTaskNames.contains(name) && rflMeta.nonEmpty) "ambiguous"
+    else if (duplicateTaskNames.contains(name) && (rflMeta.nonEmpty || taskIdentity.records.nonEmpty)) "ambiguous"
     else "unknown"
 
   private def valueAnnotationAst(ctx: ParserRuleContext, annoName: String, value: String): Ast = {
@@ -256,18 +258,59 @@ trait AstForFlow {
     annotationAst(annotationNode(ctx, s"$annoName: $value", annoName, annoName), List(assign))
   }
 
-  /** `ruleflowUuid`/`ruleflowName`/`ruleflowScope` annotations for a task or ruleflow method. */
-  private def scopeAnnotationAsts(ctx: ParserRuleContext, name: String, scope: Option[RuleflowMeta]): List[Ast] =
+  /** `ruleflowUuid`/`ruleflowName`/`ruleflowScope` annotations for a task or ruleflow method, plus the
+    * `taskIdentity*`/`taskQualifiedName` provenance annotations when a sidecar record scoped the declaration.
+    */
+  private def scopeAnnotationAsts(
+    ctx: ParserRuleContext,
+    name: String,
+    scope: Option[RuleflowMeta],
+    identity: Option[TaskIdentityRecord] = None
+  ): List[Ast] =
     scope.toList.flatMap(meta =>
       List(valueAnnotationAst(ctx, "ruleflowUuid", meta.uuid), valueAnnotationAst(ctx, "ruleflowName", meta.name))
-    ) ++ List(valueAnnotationAst(ctx, "ruleflowScope", scopeState(name, scope)))
+    ) ++ List(valueAnnotationAst(ctx, "ruleflowScope", scopeState(name, scope))) ++
+      identity.toList.flatMap(rec =>
+        List(
+          valueAnnotationAst(ctx, "taskIdentitySource", rec.source),
+          valueAnnotationAst(ctx, "taskIdentityVerified", taskIdentity.verified.toString)
+        ) ++ rec.qualifiedName.toList.map(qn => valueAnnotationAst(ctx, "taskQualifiedName", qn))
+      )
+
+  /** The basename of the file currently being lowered — the join key for task identity records. */
+  private def fileBasename: String = Paths.get(parseResult.filename).getFileName.toString
+
+  /** Scope for a task declaration: an exact (file, line, name) identity record wins over `.rfl` inference. */
+  private def declScope(ctx: ParserRuleContext, name: String): (Option[RuleflowMeta], Option[TaskIdentityRecord]) = {
+    val identity =
+      taskIdentity.records.get(TaskIdentityKey(fileBasename, Option(ctx.getStart).map(_.getLine).getOrElse(-1), name))
+    (identity.map(identityScope).orElse(taskScopeFor(name, callTaskTargets(ctx))), identity)
+  }
+
+  /** A sidecar record as scope: reuse the loaded `.rfl` meta of the same uuid when it exists (unioning the
+    * compiler-derived task membership), else synthesize a meta from the record itself.
+    */
+  private def identityScope(rec: TaskIdentityRecord): RuleflowMeta = {
+    val identityTasks = taskIdentity.tasksByUuid.getOrElse(rec.uuid, Set.empty)
+    rflMeta.find(meta => meta.uuid == rec.uuid) match {
+      case Some(meta) => meta.copy(taskIds = meta.taskIds ++ identityTasks)
+      case None       =>
+        RuleflowMeta(
+          name = rec.qualifiedName.getOrElse(rec.uuid),
+          uuid = rec.uuid,
+          taskIds = identityTasks,
+          subflowTargets = Map.empty,
+          path = rec.path
+        )
+    }
+  }
 
   /** `ruletask name(id) { initial? props* rules: sel; select? final? }`. */
   private def astForRuletask(ctx: ARLParser.RuletaskDeclContext): Ast = {
     val name = nameOf(ctx.flowId())
     valueScope.push(mutable.Map.empty)
-    val scope     = taskScopeFor(name, callTaskTargets(ctx))
-    val prevScope = currentTaskScope
+    val (scope, identity) = declScope(ctx, name)
+    val prevScope         = currentTaskScope
     currentTaskScope = scope
     val method    = flowMethodNode(ctx, name, uuidSuffix = scopedSuffix(name, scope))
     val thisAst   = thisParamAst(ctx)
@@ -350,7 +393,8 @@ trait AstForFlow {
       thisAst +: params,
       body,
       methodReturnNode(ctx, "void"),
-      annotations = (propAnnotations :+ rulesAnnotation :+ selectionAnnotation) ++ scopeAnnotationAsts(ctx, name, scope)
+      annotations =
+        (propAnnotations :+ rulesAnnotation :+ selectionAnnotation) ++ scopeAnnotationAsts(ctx, name, scope, identity)
     )
     valueScope.pop()
     currentTaskScope = prevScope
