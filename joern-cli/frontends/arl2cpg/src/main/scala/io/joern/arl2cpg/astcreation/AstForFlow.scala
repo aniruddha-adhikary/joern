@@ -167,7 +167,9 @@ trait AstForFlow {
     // `code()` slices the original file content so whitespace inside names is preserved.
     val selectorText = Option(ctx.ruleSelector()).map(code).getOrElse("").trim
     val entries      = selectorText.split(',').toList.map(_.trim).filter(_.nonEmpty)
-    val matchedRules = entries.flatMap(selectorMatchingRules)
+    // ODM selects each rule at most once; the literal order is the first occurrence (as IBM's compiled
+    // TaskDefinition.addRule lists show).
+    val matchedRules = entries.flatMap(selectorMatchingRules).distinct
 
     val selectAsts = Option(ctx.selectBlock()).map(sb => astsForSelectBlock(sb, name))
     val hasSelect  = selectAsts.isDefined
@@ -259,18 +261,26 @@ trait AstForFlow {
     SelectLowered(Option(ref), Option(selAst))
   }
 
-  /** Selector entries: `pkg.rule` exact, `pkg.*` prefix, `*` all. Whitespace runs are normalized — compiled selectors
-    * may pad names differently than the rule declarations (`GBP D_01` ≡ `GBP D_01`).
+  /** Selector entries: `pkg.rule` exact, `pkg.*` the rules directly in package `pkg` (not in its sub-packages: a
+    * rule task lists each sub-package separately, and IBM's compiled TaskDefinition members confirm it), `*` all.
+    * Whitespace runs are normalized — compiled selectors may pad names differently than the rule declarations
+    * (`GBP D_01` ≡ `GBP D_01`).
     */
   private def selectorMatchingRules(entry: String): List[String] = {
     val normalized = entry.replaceAll("\\s+", " ").trim
     normalized match {
       case "*"                             => allRuleNames
       case prefix if prefix.endsWith(".*") =>
-        val stem = prefix.stripSuffix(".*") + "."
-        allRuleNames.filter(rule => rule.replaceAll("\\s+", " ").startsWith(stem))
+        val pkg = prefix.stripSuffix(".*")
+        allRuleNames.filter(rule => packageOf(rule.replaceAll("\\s+", " ")) == pkg)
       case exact => allRuleNames.filter(rule => rule.replaceAll("\\s+", " ") == exact)
     }
+  }
+
+  /** `a.b.rule` -> `a.b`; a rule outside any package -> "". */
+  private def packageOf(rule: String): String = {
+    val dot = rule.lastIndexOf('.')
+    if (dot < 0) "" else rule.substring(0, dot)
   }
 
   // ------------------------------------------------------------------

@@ -103,6 +103,28 @@ ruletask `body>select_rules` (ctx) {
     }
   }
 
+  "ruletask package selectors" should {
+
+    val pkgArl = """ruleset R (S){
+        |  rule `a.x` { then { } }
+        |  rule `a.b.y` { then { } }
+        |  rule `a.b.z` { then { } }
+        |}
+        |ruletask direct_only (c) { ordering : LITERAL; rules : a.*; }
+        |ruletask overlapping (c) { ordering : LITERAL; rules : a.b.*, a.*, a.b.y, a.b.*; }
+        |""".stripMargin
+
+    "match only the rules directly in the package, not in its sub-packages" in {
+      val cpg = code(pkgArl)
+      cpg.method.name("direct_only").call.name.l shouldBe List("a.x")
+    }
+
+    "select each rule once, in first-occurrence order" in {
+      val cpg = code(pkgArl)
+      cpg.method.name("overlapping").call.l.sortBy(_.order).map(_.name) shouldBe List("a.b.y", "a.b.z", "a.x")
+    }
+  }
+
   "ruletask select block" should {
 
     val selArl = """ruleset R (S){
