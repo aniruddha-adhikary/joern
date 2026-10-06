@@ -1,5 +1,7 @@
 package io.joern.x2cpg.frontendspecific.arl2cpg
 
+import io.joern.arl2cpg.ArlFindings
+import io.joern.arl2cpg.ArlFindings.{Codes, Keys}
 import io.shiftleft.codepropertygraph.generated.Cpg
 import io.shiftleft.codepropertygraph.generated.nodes.{
   AstNode,
@@ -29,7 +31,8 @@ import scala.collection.mutable
   * `lineEnd`, `arlKind`, and `nodes` (sorted by id); types are sorted by `(fullName, id)` and contain `id`, `stableId`,
   * `name`, `fullName`, `file`, sorted `inherits`, and `members` sorted by `(name, id)` with `id`, `stableId`, `name`,
   * `typeFullName`, `code`, and `line`; findings are sorted by node id and contain sorted key/value fields, with
-  * duplicate keys rejected. Findings with `callId` also contain the referenced call's `callStableId`.
+  * duplicate non-list-valued keys rejected. `candidates` is a sorted JSON array, always present on
+  * `unresolved-call-target` findings. Findings with `callId` also contain the referenced call's `callStableId`.
   *
   * Every node has `id`, `stableId`, `label`, `order`, `code`, `line`, `columnNumber`, and AST-child ids sorted by
   * `(order, id)`; CFG nodes add sorted `cfgOut`. CALL adds `name`, `methodFullName`, `signature`, `typeFullName`,
@@ -125,9 +128,9 @@ object ArlExport {
 
   private def findingJson(finding: Finding, stableIdsByNodeId: Map[Long, String]): ujson.Obj = {
     val pairs         = finding.keyValuePairs.map(pair => pair.key -> pair.value).toList
-    val duplicateKeys = pairs
-      .groupBy(_._1)
-      .collect { case (key, values) if values.size > 1 => key }
+    val valuesByKey   = pairs.groupMap(_._1)(_._2)
+    val duplicateKeys = valuesByKey
+      .collect { case (key, values) if values.size > 1 && !ArlFindings.ListValuedKeys.contains(key) => key }
       .toList
       .sorted
     if (duplicateKeys.nonEmpty) {
@@ -147,7 +150,18 @@ object ArlExport {
         )
         pairs :+ ("callStableId" -> callStableId)
     }
-    ujson.Obj.from(withCallStableId.sortBy(_._1).map { case (key, value) => key -> ujson.Str(value) })
+    val outputValuesByKey = withCallStableId.groupMap(_._1)(_._2)
+    val code              = outputValuesByKey.get(Keys.Code).flatMap(_.headOption).getOrElse("")
+    val requiredListKeys  =
+      if (code == Codes.UnresolvedCallTarget) ArlFindings.ListValuedKeys else Set.empty[String]
+    val outputKeys = outputValuesByKey.keySet ++ requiredListKeys
+    ujson.Obj.from(outputKeys.toList.sorted.map { key =>
+      val values = outputValuesByKey.getOrElse(key, Nil)
+      val value  =
+        if (ArlFindings.ListValuedKeys.contains(key)) ujson.Arr.from(values.sorted.map(ujson.Str(_)))
+        else ujson.Str(values.head)
+      key -> value
+    })
   }
 
   private def arlKind(method: Method): String = {
