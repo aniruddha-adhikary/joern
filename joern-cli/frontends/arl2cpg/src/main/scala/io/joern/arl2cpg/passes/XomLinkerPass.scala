@@ -133,13 +133,13 @@ class XomLinkerPass(cpg: Cpg, xomClasspath: Seq[String] = Seq.empty) extends Cpg
       val rawOwner   = prefix.stripSuffix(s".${call.name}")
       val unresolved = Set(Defines.UnresolvedNamespace, "", "<empty>")
       if (unresolved.contains(rawOwner) || rawOwner.contains(Defines.UnresolvedNamespace)) None
-      else if (rawOwner.contains('.')) Option.when(typeModel.get(rawOwner).isDefined)(rawOwner)
+      else if (rawOwner.contains('.')) typeModel.get(rawOwner).map(_.fullName)
       else {
         xomSimpleNames
           .get(rawOwner)
           .filter(_.size == 1)
           .flatMap(_.headOption)
-          .orElse(Option.when(typeModel.get(s"java.lang.$rawOwner").isDefined)(s"java.lang.$rawOwner"))
+          .orElse(typeModel.get(s"java.lang.$rawOwner").map(_.fullName))
       }
     }
 
@@ -160,11 +160,18 @@ class XomLinkerPass(cpg: Cpg, xomClasspath: Seq[String] = Seq.empty) extends Cpg
       else named
     }
 
+    def constructorType(call: Call, method: JavaMethodInfo): String =
+      receiverType(call)
+        .flatMap(typeName => typeModel.get(typeName).map(_.fullName))
+        .orElse(staticOwner(call))
+        .getOrElse(method.owner)
+
     def resolveCall(call: Call): CallResolution = {
       val owner = call.dispatchType match {
-        case DispatchTypes.DYNAMIC_DISPATCH => receiverType(call).filter(typeModel.get(_).isDefined)
-        case DispatchTypes.STATIC_DISPATCH  => staticOwner(call)
-        case _                              => None
+        case DispatchTypes.DYNAMIC_DISPATCH =>
+          receiverType(call).flatMap(typeName => typeModel.get(typeName).map(_.fullName))
+        case DispatchTypes.STATIC_DISPATCH => staticOwner(call)
+        case _                             => None
       }
       owner match {
         case None                  => Unresolved("receiver-unknown", Nil)
@@ -300,6 +307,41 @@ class XomLinkerPass(cpg: Cpg, xomClasspath: Seq[String] = Seq.empty) extends Cpg
       } else None
     }
 
+    def conditionalType(first: String, second: String): Option[String] = {
+      val unknownTypes = Set(Defines.Any, Defines.UnresolvedNamespace)
+      if (unknownTypes.contains(first) || unknownTypes.contains(second)) None
+      else if (first == second) Some(first)
+      else if (
+        Set("boolean", "java.lang.Boolean").contains(first) &&
+        Set("boolean", "java.lang.Boolean").contains(second)
+      ) Some("boolean")
+      else {
+        val firstPrimitive  = unboxed(first)
+        val secondPrimitive = unboxed(second)
+        if (NumericTypes.contains(firstPrimitive) && NumericTypes.contains(secondPrimitive)) {
+          if (firstPrimitive == secondPrimitive) Some(firstPrimitive)
+          else if (Set(firstPrimitive, secondPrimitive) == Set("byte", "short")) Some("short")
+          else numericPromotion(List(firstPrimitive, secondPrimitive))
+        } else if (first == NullType) {
+          if (typeModel.isReference(second)) Some(second)
+          else if (typeModel.isPrimitive(second)) BoxedTypes.get(second)
+          else None
+        } else if (second == NullType) {
+          if (typeModel.isReference(first)) Some(first)
+          else if (typeModel.isPrimitive(first)) BoxedTypes.get(first)
+          else None
+        } else if (
+          typeModel.isReference(first) && typeModel.isReference(second) && typeModel.isSubtype(first, second)
+        ) {
+          Some(second)
+        } else if (
+          typeModel.isReference(first) && typeModel.isReference(second) && typeModel.isSubtype(second, first)
+        ) {
+          Some(first)
+        } else None
+      }
+    }
+
     def unaryNumericPromotion(typeName: String): Option[String] = {
       val primitive = unboxed(typeName)
       Option.when(NumericTypes.contains(primitive)) {
@@ -332,7 +374,7 @@ class XomLinkerPass(cpg: Cpg, xomClasspath: Seq[String] = Seq.empty) extends Cpg
       if (booleanOperators.contains(call.name)) Some("boolean")
       else if (assignmentOperators.contains(call.name)) argTypes.headOption.filter(_ != Defines.Any)
       else if (call.name == Operators.conditional) {
-        argTypes.lift(1).filter(tpe => argTypes.lift(2).contains(tpe) && tpe != Defines.Any)
+        argTypes.lift(1).flatMap(first => argTypes.lift(2).flatMap(second => conditionalType(first, second)))
       } else if (call.name == Operators.indexAccess) {
         argTypes.headOption.filter(_.endsWith("[]")).map(_.dropRight(2))
       } else if (call.name == Operators.plus && argTypes.contains("java.lang.String")) {
@@ -377,9 +419,7 @@ class XomLinkerPass(cpg: Cpg, xomClasspath: Seq[String] = Seq.empty) extends Cpg
         result match {
           case Resolved(method) =>
             val returnType =
-              if (method.name == Defines.ConstructorMethodName)
-                receiverType(call).orElse(staticOwner(call)).getOrElse(method.owner)
-              else method.returnType
+              if (method.name == Defines.ConstructorMethodName) constructorType(call, method) else method.returnType
             updateType(call, returnType)
             nextResolutions(call.id()) = ResolvedCall(method.fullName, method.signature, returnType, method.isStatic)
           case _: Unresolved =>
@@ -434,9 +474,7 @@ class XomLinkerPass(cpg: Cpg, xomClasspath: Seq[String] = Seq.empty) extends Cpg
       result match {
         case Resolved(method) =>
           val returnType =
-            if (method.name == Defines.ConstructorMethodName)
-              receiverType(call).orElse(staticOwner(call)).getOrElse(method.owner)
-            else method.returnType
+            if (method.name == Defines.ConstructorMethodName) constructorType(call, method) else method.returnType
           types(call.id()) = returnType
           resolvedCalls(call.id()) = ResolvedCall(method.fullName, method.signature, returnType, method.isStatic)
         case _: Unresolved =>
