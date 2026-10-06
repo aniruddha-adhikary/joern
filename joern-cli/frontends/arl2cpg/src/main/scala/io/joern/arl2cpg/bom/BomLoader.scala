@@ -1,6 +1,6 @@
 package io.joern.arl2cpg.bom
 
-import io.joern.arl2cpg.ArlFindings.{Codes, Keys}
+import io.joern.x2cpg.frontendspecific.arl2cpg.ArlFindings.{Codes, Keys}
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}

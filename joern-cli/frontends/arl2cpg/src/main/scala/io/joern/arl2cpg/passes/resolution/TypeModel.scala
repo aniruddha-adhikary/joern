@@ -1,6 +1,6 @@
 package io.joern.arl2cpg.passes.resolution
 
-import io.joern.arl2cpg.ArlFindings.Codes
+import io.joern.x2cpg.frontendspecific.arl2cpg.ArlFindings.Codes
 import io.joern.arl2cpg.bom.{
   BomDiagnostic,
   BomMember,
