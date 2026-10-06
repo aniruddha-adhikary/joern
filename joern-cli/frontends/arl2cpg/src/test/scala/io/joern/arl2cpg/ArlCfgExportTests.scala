@@ -323,6 +323,35 @@ class ArlCfgExportTests extends Arl2CpgSuite() {
       }
     }
 
+    "export interval bracket tags and source column" in {
+      val source = """import loan.Borrower;
+        |public signature S extends java.lang.Object {
+        |  public in Borrower borrower = null;
+        |}
+        |ruleset R (S) {
+        |  rule `r.interval` {
+        |    then {
+        |      x = [0,1[;
+        |    }
+        |  }
+        |}
+        |""".stripMargin
+      val cpg = code(source)
+      try {
+        val nodes    = ujson.read(ArlExport.toJson(cpg))("methods").arr.flatMap(_("nodes").arr)
+        val interval = nodes
+          .find(node => node("label").str == "CALL" && node("code").str == "[0,1[")
+          .get
+        val intervalOffset = source.indexOf("[0,1[")
+        val expectedColumn = intervalOffset - source.lastIndexOf('\n', intervalOffset) - 1
+
+        interval("lowerClosed").bool.shouldBe(true)
+        interval("upperClosed").bool.shouldBe(false)
+        interval("code").str.shouldBe("[0,1[")
+        interval("columnNumber").num.shouldBe(expectedColumn.toDouble)
+      } finally cpg.close()
+    }
+
     "annotate all bundled ARL methods without unknown kinds" in {
       withResourceCpg(cfgResources) { cpg =>
         val methods = cpg.method.l.filterNot(_.isExternal).filter(_.filename.endsWith(".arl"))
