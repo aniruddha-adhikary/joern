@@ -49,7 +49,7 @@ class Arl2Cpg extends X2CpgFrontend {
       }
       TypeNodePass.withTypesFromCpg(cpg).createAndApply()
       if (config.xomSrcPaths.nonEmpty || config.xomClasspath.nonEmpty) {
-        new XomLinkerPass(cpg, config.xomClasspath).createAndApply()
+        new XomLinkerPass(cpg, config.xomClasspath, b2x).createAndApply()
       }
       new B2xEffectsPass(cpg, b2x).createAndApply()
       new FindingsPass(cpg, diagnostics, config.allowUnknown).createAndApply()

@@ -15,14 +15,15 @@ object ArlFindings {
 
   /** Finding key/value keys. */
   object Keys {
-    val Code       = "code"
-    val Reason     = "reason"
-    val Message    = "message"
-    val Filename   = "filename"
-    val Line       = "line"
-    val Author     = "author"
-    val CallId     = "callId"
-    val Candidates = "candidates"
+    val Code         = "code"
+    val Reason       = "reason"
+    val Message      = "message"
+    val Filename     = "filename"
+    val Line         = "line"
+    val Author       = "author"
+    val CallId       = "callId"
+    val Candidates   = "candidates"
+    val ReceiverType = "receiverType"
   }
 
   val Author = "arl2cpg"

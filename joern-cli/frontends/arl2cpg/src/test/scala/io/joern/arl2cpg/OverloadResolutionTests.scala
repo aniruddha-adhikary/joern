@@ -539,7 +539,9 @@ ruleset R (S) {
       val noCandidate = findCall(cpg, "missing", "borrower.missing(1)").get
       val unknown     = findCall(cpg, "missing", "unknownReceiver.missing(1)").get
       ArlFindings.reason(findingFor(cpg, noCandidate.id()).get) shouldBe "no-candidate"
+      ArlFindings.value(findingFor(cpg, noCandidate.id()).get, Keys.ReceiverType) shouldBe "loan.Borrower"
       ArlFindings.reason(findingFor(cpg, unknown.id()).get) shouldBe "receiver-unknown"
+      ArlFindings.value(findingFor(cpg, unknown.id()).get, Keys.ReceiverType) shouldBe "ANY"
     }
 
     "propagate member and resolved-call return types bottom-up" in withCpg(
@@ -831,7 +833,7 @@ ruleset R (S) {
       )
     }
 
-    "type array initializers, allow array covariance, and not invent contains" in withCpg(
+    "type array initializers, allow array covariance, and resolve ARL array contains" in withCpg(
       """LoanUtil.acceptObjects(new String[]{"a", "b"});
         |LoanUtil.acceptObjects(new Object[]{"a"});
         |LoanUtil.acceptVarargs(new String[]{"a"});
@@ -874,8 +876,9 @@ ruleset R (S) {
       arrays should contain("java.lang.String[]")
       arrays should contain("java.lang.Object[]")
       val contains = findCall(cpg, "contains", """values.contains("a")""").get
-      contains.methodFullName should include("<unresolvedSignature>")
-      ArlFindings.reason(findingFor(cpg, contains.id()).get) shouldBe "no-candidate"
+      contains.methodFullName shouldBe "java.lang.String[].contains:boolean(java.lang.String)"
+      contains.signature shouldBe "boolean(java.lang.String)"
+      contains.typeFullName shouldBe "boolean"
     }
 
     "match generic arguments against erased Java descriptors" in withCpg(

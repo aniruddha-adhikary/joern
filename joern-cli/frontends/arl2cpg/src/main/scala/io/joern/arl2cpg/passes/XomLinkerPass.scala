@@ -2,6 +2,7 @@ package io.joern.arl2cpg.passes
 
 import io.joern.arl2cpg.ArlFindings
 import io.joern.arl2cpg.ArlFindings.{Codes, Keys}
+import io.joern.arl2cpg.b2x.B2xModel
 import io.joern.arl2cpg.passes.resolution.{JavaMethodInfo, TypeModel}
 import io.joern.x2cpg.Defines
 import io.shiftleft.codepropertygraph.generated.nodes.*
@@ -12,10 +13,12 @@ import io.shiftleft.semanticcpg.language.*
 import scala.collection.mutable
 
 /** Links ARL calls against Java XOM, classpath, and JDK types using statically inferred argument types. */
-class XomLinkerPass(cpg: Cpg, xomClasspath: Seq[String] = Seq.empty) extends CpgPass(cpg) {
+class XomLinkerPass(cpg: Cpg, xomClasspath: Seq[String] = Seq.empty, b2x: Option[B2xModel] = None)
+    extends CpgPass(cpg) {
 
-  private val MaxIterations = 30
-  private val NullType      = "null"
+  private val MaxIterations   = 30
+  private val NullType        = "null"
+  private val EngineDataKinds = Set("ruleflow", "flowtask", "functiontask")
 
   private sealed trait CallResolution
   private final case class Resolved(method: JavaMethodInfo)                     extends CallResolution
@@ -30,7 +33,12 @@ class XomLinkerPass(cpg: Cpg, xomClasspath: Seq[String] = Seq.empty) extends Cpg
 
   override def run(builder: DiffGraphBuilder): Unit = {
     val sourceDecls    = cpg.typeDecl.isExternal(false).filenameNot(".*\\.arl$").l
-    val typeModel      = new TypeModel(sourceDecls, xomClasspath)
+    val signatureDecls = cpg.typeDecl
+      .filename(".*\\.arl$")
+      .l
+      .filter(_.code.startsWith("signature "))
+      .sortBy(typeDecl => (typeDecl.fullName, typeDecl.filename))
+    val typeModel      = new TypeModel(sourceDecls ++ signatureDecls, xomClasspath)
     val xomSimpleNames = sourceDecls
       .map(td => td.name -> td.fullName)
       .groupBy(_._1)
@@ -66,6 +74,24 @@ class XomLinkerPass(cpg: Cpg, xomClasspath: Seq[String] = Seq.empty) extends Cpg
     cpg.typeRef.filter(inArlFile).foreach(node => seed(node, node.typeFullName))
     cpg.methodReturn.filter(inArlFile).foreach(node => seed(node, node.typeFullName))
     cpg.call.filter(inArlFile).foreach(node => seed(node, node.typeFullName))
+
+    signatureDecls match {
+      case signature :: Nil =>
+        val engineDataParameters = cpg.method
+          .filter(inArlFile)
+          .filter(method => method.annotation.name("arlKind").parameterAssign.value.code.l.exists(EngineDataKinds))
+          .flatMap(_.parameter.l)
+          .filter(_.name.startsWith("$"))
+          .toList
+          .sortBy(_.id())
+        val engineDataNames = engineDataParameters.map(_.name).toSet
+        engineDataParameters.foreach(parameter => types(parameter.id()) = signature.fullName)
+        cpg.identifier
+          .filter(inArlFile)
+          .filter(identifier => identifier.typeFullName == Defines.Any && engineDataNames.contains(identifier.name))
+          .foreach(identifier => types(identifier.id()) = signature.fullName)
+      case _ =>
+    }
 
     cpg.typeDecl.filename(".*\\.arl$").l.sortBy(_.fullName).foreach { typeDecl =>
       val resolvedParents = typeDecl.inheritsFromTypeFullName.toList.map { parent =>
@@ -167,6 +193,22 @@ class XomLinkerPass(cpg: Cpg, xomClasspath: Seq[String] = Seq.empty) extends Cpg
         .getOrElse(method.owner)
 
     def resolveCall(call: Call): CallResolution = {
+      def noCandidate(owner: String, candidateNames: List[String]): Unresolved = {
+        val hierarchyNames = typeModel.hierarchyNames(owner)
+        val b2xCandidates  = b2x.toList
+          .flatMap(model =>
+            hierarchyNames.flatMap(typeName => model.candidates(typeName, call.name, actualArguments(call).size))
+          )
+          .map(_.key)
+          .distinct
+          .sorted
+        if (
+          !typeModel.hasMethodNamedInHierarchy(owner, call.name) &&
+          b2xCandidates.nonEmpty
+        ) Unresolved("bom-only", b2xCandidates)
+        else Unresolved("no-candidate", candidateNames)
+      }
+
       val owner = call.dispatchType match {
         case DispatchTypes.DYNAMIC_DISPATCH =>
           receiverType(call).flatMap(typeName => typeModel.get(typeName).map(_.fullName))
@@ -185,7 +227,7 @@ class XomLinkerPass(cpg: Cpg, xomClasspath: Seq[String] = Seq.empty) extends Cpg
             val arityCandidates = candidates.filter(hasApplicableArity(_, argumentTypes.size))
             arityCandidates match {
               case single :: Nil => Resolved(single)
-              case Nil           => Unresolved("no-candidate", candidateNames)
+              case Nil           => noCandidate(receiverOrOwner, candidateNames)
               case many          => Unresolved("ambiguous", many.map(_.fullName).distinct.sorted)
             }
           } else {
@@ -202,7 +244,7 @@ class XomLinkerPass(cpg: Cpg, xomClasspath: Seq[String] = Seq.empty) extends Cpg
               else if (fixedPhase2.nonEmpty) (fixedPhase2, false)
               else (varargsPhase, true)
 
-            if (applicable.isEmpty) Unresolved("no-candidate", candidateNames)
+            if (applicable.isEmpty) noCandidate(receiverOrOwner, candidateNames)
             else {
               val maximal = applicable.filterNot { candidate =>
                 applicable.exists(other =>
@@ -221,6 +263,18 @@ class XomLinkerPass(cpg: Cpg, xomClasspath: Seq[String] = Seq.empty) extends Cpg
             }
           }
       }
+    }
+
+    def receiverTypeForFinding(call: Call): String = {
+      val typeName = call.dispatchType match {
+        case DispatchTypes.DYNAMIC_DISPATCH => receiverType(call)
+        case DispatchTypes.STATIC_DISPATCH  => staticOwner(call)
+        case _                              => None
+      }
+      typeName
+        .filterNot(name => name == Defines.Any || name == Defines.UnresolvedNamespace)
+        .map(name => typeModel.get(name).map(_.fullName).getOrElse(name))
+        .getOrElse(Defines.Any)
     }
 
     def fixedArityApplicable(method: JavaMethodInfo, argumentTypes: List[String], phase2: Boolean): Boolean =
@@ -407,6 +461,8 @@ class XomLinkerPass(cpg: Cpg, xomClasspath: Seq[String] = Seq.empty) extends Cpg
         val baseType  = arguments.headOption.flatMap(expressionType)
         val fieldName = arguments.lift(1).collect { case field: FieldIdentifier => field.canonicalName }
         (baseType, fieldName) match {
+          case (Some(typeName), Some("this")) =>
+            updateType(call, typeName)
           case (Some(typeName), Some(field)) =>
             typeModel.memberType(typeName, field).foreach(memberType => updateType(call, memberType))
           case _ =>
@@ -518,7 +574,11 @@ class XomLinkerPass(cpg: Cpg, xomClasspath: Seq[String] = Seq.empty) extends Cpg
           s"unable to resolve Java call '${call.code}' ($reason)",
           filename,
           call.lineNumber,
-          List(Keys.CallId -> call.id().toString, Keys.Candidates -> candidates.mkString(";"))
+          List(
+            Keys.CallId       -> call.id().toString,
+            Keys.Candidates   -> candidates.mkString(";"),
+            Keys.ReceiverType -> receiverTypeForFinding(call)
+          )
         )
       }
     }
