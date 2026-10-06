@@ -204,7 +204,13 @@ trait AstForRules {
         overriddenRules.map(target => overridesAnnotationAst(ctx, target))
 
     val ast =
-      methodAstWithAnnotations(method, Seq(thisAst), body, methodRet, annotations = propertyAnnotations)
+      methodAstWithAnnotations(
+        method,
+        Seq(thisAst),
+        body,
+        methodRet,
+        annotations = valueAnnotationAst(ctx, "arlKind", "rule") :: propertyAnnotations
+      )
     valueScope.pop()
     implicitReceiver.pop()
     ast

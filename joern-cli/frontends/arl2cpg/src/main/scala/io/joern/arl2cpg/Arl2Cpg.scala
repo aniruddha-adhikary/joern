@@ -1,7 +1,14 @@
 package io.joern.arl2cpg
 
 import io.joern.arl2cpg.b2x.B2xModel
-import io.joern.arl2cpg.passes.{AstCreationPass, B2xEffectsPass, FindingsPass, ParseDiagnostics, XomLinkerPass}
+import io.joern.arl2cpg.passes.{
+  AstCreationPass,
+  B2xEffectsPass,
+  FindingsPass,
+  ParseDiagnostics,
+  XomLinkerPass,
+  XomMethodKindPass
+}
 import io.joern.javasrc2cpg.{Config as JavaSrcConfig}
 import io.joern.javasrc2cpg.passes.{AstCreationPass as JavaSrcAstCreationPass, OuterClassRefPass, TypeInferencePass}
 import io.joern.x2cpg.SourceFiles
@@ -37,6 +44,9 @@ class Arl2Cpg extends X2CpgFrontend {
       MetaDataPass(cpg, Language, config.inputPath).createAndApply()
       new AstCreationPass(cpg, config, diagnostics)(config.schemaValidation).createAndApply()
       config.xomSrcPaths.toSeq.sorted.foreach(runJavasrcPasses(cpg, _))
+      if (config.xomSrcPaths.nonEmpty) {
+        new XomMethodKindPass(cpg).createAndApply()
+      }
       TypeNodePass.withTypesFromCpg(cpg).createAndApply()
       if (config.xomSrcPaths.nonEmpty || config.xomClasspath.nonEmpty) {
         new XomLinkerPass(cpg, config.xomClasspath).createAndApply()

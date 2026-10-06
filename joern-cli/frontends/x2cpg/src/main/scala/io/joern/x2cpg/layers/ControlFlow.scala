@@ -8,6 +8,7 @@ import io.shiftleft.semanticcpg.layers.{LayerCreator, LayerCreatorContext, Layer
 import io.joern.x2cpg.passes.controlflow.CfgCreationPass
 import io.joern.x2cpg.passes.controlflow.cfgdominator.CfgDominatorPass
 import io.joern.x2cpg.passes.controlflow.codepencegraph.CdgPass
+import io.joern.x2cpg.frontendspecific.arl2cpg.{ArlCfgCreationPass, Language as ArlLanguage}
 
 object ControlFlow {
   val overlayName: String = "controlflow"
@@ -18,6 +19,7 @@ object ControlFlow {
     val cfgCreationPass = cpg.metaData.language.lastOption match {
       case Some(Languages.GHIDRA) => Iterator[CpgPassBase]()
       case Some(Languages.LLVM)   => Iterator[CpgPassBase]()
+      case Some(ArlLanguage)      => Iterator[CpgPassBase](new ArlCfgCreationPass(cpg))
       case _                      => Iterator[CpgPassBase](new CfgCreationPass(cpg))
     }
     cfgCreationPass ++ Iterator(new CfgDominatorPass(cpg), new CdgPass(cpg))

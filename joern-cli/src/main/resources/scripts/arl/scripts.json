@@ -1,0 +1,9 @@
+{
+  "description": "ARL-specific scripts.",
+  "scripts": [
+    {
+      "name": "export.sc",
+      "description": "Export ARL methods, ASTs, and control flow as deterministic JSON."
+    }
+  ]
+}

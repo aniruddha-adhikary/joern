@@ -2,6 +2,7 @@ package io.joern.arl2cpg
 
 import io.joern.arl2cpg.ArlFindings.{Codes, Reasons}
 import io.joern.arl2cpg.passes.Gate1Violation
+import io.joern.x2cpg.X2Cpg
 import io.shiftleft.codepropertygraph.generated.Cpg
 import io.shiftleft.codepropertygraph.generated.nodes.{Call, Method}
 import io.shiftleft.semanticcpg.language.*
@@ -112,10 +113,20 @@ class B2xTests extends AnyWordSpec with Matchers with BeforeAndAfterAll {
       method.size shouldBe 1
       method.head.filename shouldBe loanB2x.toString
       method.head.code should include("this.setRejected(true)")
+      method.head.annotation.name("arlKind").parameterAssign.value.code.l shouldBe List("function")
       calls(withB2x, "outcome", "rejectWith", 2).map(_.methodFullName).toSet shouldBe Set(method.head.fullName)
       calls(withB2x, "outcome", "rejectWith", 2).foreach(c =>
         tags(c, ArlTags.ResolvesTo) shouldBe Set(method.head.fullName)
       )
+    }
+
+    "connect normal completion in B2X function bodies to METHOD_RETURN" in {
+      val cpg = build(_.withB2xPath(loanB2x.toString))
+      try {
+        X2Cpg.applyDefaultOverlays(cpg)
+        val method = cpg.method.fullName(".*rejectWith.*").head
+        method.methodReturn.cfgIn.l.exists(_.method.id == method.id) shouldBe true
+      } finally cpg.close()
     }
 
     "say so when a class is absent from the mapping" in {
