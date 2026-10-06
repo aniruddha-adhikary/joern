@@ -33,7 +33,7 @@ final case class JavaTypeInfo(
   fields: Map[String, String]
 )
 
-/** Java type information from the XOM CPG, ordered classpath entries, and the running JDK. */
+/** Java type information from the XOM CPG, ARL signature members, ordered classpath entries, and the running JDK. */
 final class TypeModel(sourceDecls: Seq[TypeDecl], classpath: Seq[String]) {
 
   private val logger = LoggerFactory.getLogger(getClass)
@@ -50,7 +50,12 @@ final class TypeModel(sourceDecls: Seq[TypeDecl], classpath: Seq[String]) {
       .toMap
 
   private val sourceNamesBySimpleName: Map[String, Seq[String]] =
-    sourceTypes.keys.toSeq.sorted.groupBy(_.split('.').last)
+    sourceDecls
+      .filterNot(_.code.startsWith("signature "))
+      .map(_.fullName)
+      .distinct
+      .sorted
+      .groupBy(_.split('.').last)
 
   private val classpathIndex: Map[String, ClassLocation] = indexClasspath()
   private val parsedClasspathTypes                       = mutable.Map.empty[String, Option[JavaTypeInfo]]
@@ -134,6 +139,11 @@ final class TypeModel(sourceDecls: Seq[TypeDecl], classpath: Seq[String]) {
       .toList
       .sortBy(method => (method.owner, method.fullName))
   }
+
+  def hierarchyNames(typeName: String): List[String] = hierarchy(typeName).map(_.fullName)
+
+  def hasMethodNamedInHierarchy(typeName: String, name: String): Boolean =
+    hierarchy(typeName).exists(_.methods.exists(_.name == name))
 
   def memberType(typeName: String, memberName: String): Option[String] =
     hierarchy(typeName).iterator
@@ -361,10 +371,27 @@ final class TypeModel(sourceDecls: Seq[TypeDecl], classpath: Seq[String]) {
         Some("java.lang.Object"),
         Seq("java.lang.Cloneable", "java.io.Serializable"),
         isInterface = false,
-        methods = Seq.empty,
+        methods = Seq(arrayContainsMethod(fullName)),
         fields = Map.empty
       )
     }
+
+  /** ARL/BOM array membership is not a Java method: IBM rewrites it to a collection utility. */
+  private def arrayContainsMethod(arrayTypeName: String): JavaMethodInfo = {
+    val componentType = arrayTypeName.stripSuffix("[]")
+    val signature     = s"boolean($componentType)"
+    JavaMethodInfo(
+      arrayTypeName,
+      "contains",
+      List(componentType),
+      "boolean",
+      isStatic = false,
+      isVarargs = false,
+      s"$arrayTypeName.contains:$signature",
+      signature,
+      isPublic = true
+    )
+  }
 
   private def capitalize(value: String): String =
     value.headOption.map(_.toUpper.toString + value.drop(1)).getOrElse(value)
