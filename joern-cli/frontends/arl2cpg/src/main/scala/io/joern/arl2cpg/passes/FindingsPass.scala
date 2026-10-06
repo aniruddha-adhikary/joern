@@ -1,7 +1,7 @@
 package io.joern.arl2cpg.passes
 
-import io.joern.arl2cpg.ArlFindings
-import io.joern.arl2cpg.ArlFindings.Codes
+import io.joern.x2cpg.frontendspecific.arl2cpg.ArlFindings
+import io.joern.x2cpg.frontendspecific.arl2cpg.ArlFindings.Codes
 import io.shiftleft.codepropertygraph.generated.nodes.Unknown
 import io.shiftleft.codepropertygraph.generated.{Cpg, DiffGraphBuilder}
 import io.shiftleft.passes.CpgPass

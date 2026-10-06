@@ -1,7 +1,7 @@
 package io.joern.arl2cpg.passes
 
-import io.joern.arl2cpg.ArlFindings
-import io.joern.arl2cpg.ArlFindings.{Codes, Keys}
+import io.joern.x2cpg.frontendspecific.arl2cpg.ArlFindings
+import io.joern.x2cpg.frontendspecific.arl2cpg.ArlFindings.{Codes, Keys}
 import io.joern.arl2cpg.b2x.B2xModel
 import io.joern.arl2cpg.passes.resolution.{JavaMethodInfo, TypeModel}
 import io.joern.x2cpg.Defines
