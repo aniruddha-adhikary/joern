@@ -1,7 +1,7 @@
 package io.joern.arl2cpg.bom
 
 import io.joern.arl2cpg.Main
-import io.joern.arl2cpg.ArlFindings.{Codes, Keys}
+import io.joern.x2cpg.frontendspecific.arl2cpg.ArlFindings.{Codes, Keys}
 import io.joern.arl2cpg.passes.resolution.TypeModel
 import io.shiftleft.semanticcpg.utils.FileUtil
 import org.scalatest.matchers.should.Matchers
