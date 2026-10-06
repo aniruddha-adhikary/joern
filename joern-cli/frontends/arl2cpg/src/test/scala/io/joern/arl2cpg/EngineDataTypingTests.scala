@@ -34,9 +34,21 @@ class EngineDataTypingTests extends AnyWordSpec with Matchers {
         config = config.withB2xPath(b2xFile.toString)
       }
       val cpg = new Arl2Cpg().createCpg(config).get
-      try test(cpg)
+      try {
+        assertEveryArlCallHasSourcePosition(cpg)
+        test(cpg)
+      }
       finally cpg.close()
     }
+
+  private def assertEveryArlCallHasSourcePosition(cpg: Cpg): Unit = {
+    val missing = cpg.call.l.filter(call =>
+      call.file.name.headOption.exists(_.endsWith(".arl")) && (call.lineNumber.isEmpty || call.columnNumber.isEmpty)
+    )
+    withClue(s"ARL CALLs missing lineNumber or columnNumber: ${missing.map(_.code).mkString(", ")}") {
+      missing shouldBe empty
+    }
+  }
 
   private def unresolvedFindingJson(cpg: Cpg, call: Call): ujson.Value =
     ujson
