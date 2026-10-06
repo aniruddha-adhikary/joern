@@ -66,8 +66,9 @@ sbt "arl2cpg/Test/runMain io.joern.arl2cpg.ResolutionCoverageRunner \
 ```
 
 It reports total non-operator CALLs, resolved and unresolved counts, and unresolved counts by finding reason when
-available. The optional `--xom-classpath <path>` argument is accepted for command compatibility but ignored by the
-current linker. The TSV has a header followed by sorted `filename`, `line`, `code`, and `methodFullName` columns.
+available. The runner accepts repeated `--xom-classpath <path>` arguments and passes them to the linker in order; the
+baseline invocation above uses only XOM sources. The TSV has a header followed by sorted `filename`, `line`, `code`,
+and `methodFullName` columns.
 `ResolutionRegressionTests` requires every call resolved by the current linker to retain exactly the same target.
 
 Before argument-aware resolution was implemented, the bundled resources measured:

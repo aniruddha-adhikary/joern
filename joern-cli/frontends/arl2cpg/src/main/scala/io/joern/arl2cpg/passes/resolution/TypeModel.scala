@@ -1,0 +1,359 @@
+package io.joern.arl2cpg.passes.resolution
+
+import io.shiftleft.codepropertygraph.generated.nodes.TypeDecl
+import io.shiftleft.semanticcpg.language.*
+import org.objectweb.asm.{ClassReader, ClassVisitor, FieldVisitor, MethodVisitor, Opcodes, Type}
+import org.slf4j.LoggerFactory
+
+import java.net.URI
+import java.nio.file.{FileSystems, Files, Path, Paths}
+import java.util.jar.JarFile
+import scala.collection.mutable
+import scala.jdk.CollectionConverters.*
+import scala.util.control.NonFatal
+
+final case class JavaMethodInfo(
+  owner: String,
+  name: String,
+  paramTypes: List[String],
+  returnType: String,
+  isStatic: Boolean,
+  isVarargs: Boolean,
+  fullName: String,
+  signature: String,
+  isPublic: Boolean
+)
+
+final case class JavaTypeInfo(
+  fullName: String,
+  superClass: Option[String],
+  interfaces: Seq[String],
+  isInterface: Boolean,
+  methods: Seq[JavaMethodInfo],
+  fields: Map[String, String]
+)
+
+/** Java type information from the XOM CPG, ordered classpath entries, and the running JDK. */
+final class TypeModel(sourceDecls: Seq[TypeDecl], classpath: Seq[String]) {
+
+  private val logger = LoggerFactory.getLogger(getClass)
+
+  private sealed trait ClassLocation
+  private final case class DirectoryClass(root: Path, relativePath: Path) extends ClassLocation
+  private final case class JarClass(jar: Path, entryName: String)         extends ClassLocation
+
+  private val sourceTypes: Map[String, JavaTypeInfo] =
+    sourceDecls
+      .sortBy(td => (td.fullName, td.filename))
+      .map(sourceTypeInfo)
+      .map(info => info.fullName -> info)
+      .toMap
+
+  private val sourceNamesBySimpleName: Map[String, Seq[String]] =
+    sourceTypes.keys.toSeq.sorted.groupBy(_.split('.').last)
+
+  private val classpathIndex: Map[String, ClassLocation] = indexClasspath()
+  private val parsedClasspathTypes                       = mutable.Map.empty[String, Option[JavaTypeInfo]]
+  private val parsedJdkTypes                             = mutable.Map.empty[String, Option[JavaTypeInfo]]
+
+  private lazy val jrtFileSystem =
+    try Some(FileSystems.getFileSystem(URI.create("jrt:/")))
+    catch {
+      case NonFatal(exception) =>
+        logger.warn("Unable to access the running JDK's jrt:/ filesystem", exception)
+        None
+    }
+
+  def xomTypeNames: Set[String] = sourceTypes.keySet
+
+  def uniqueXomTypeForSimpleName(name: String): Option[String] =
+    sourceNamesBySimpleName.get(name).filter(_.size == 1).flatMap(_.headOption)
+
+  def get(fullName: String): Option[JavaTypeInfo] =
+    sourceTypes
+      .get(fullName)
+      .orElse {
+        parsedClasspathTypes.getOrElseUpdate(fullName, classpathIndex.get(fullName).flatMap(readClass))
+      }
+      .orElse {
+        parsedJdkTypes.getOrElseUpdate(fullName, readJdkClass(fullName))
+      }
+      .orElse(arrayType(fullName))
+
+  def isPrimitive(typeName: String): Boolean = PrimitiveTypes.contains(typeName)
+
+  def isReference(typeName: String): Boolean = typeName != "null" && !isPrimitive(typeName) && typeName != "void"
+
+  def isSubtype(from: String, to: String): Boolean = {
+    if (from == to) true
+    else if (from == "null") isReference(to)
+    else if (from.endsWith("[]") && to.endsWith("[]")) {
+      val fromComponent = from.dropRight(2)
+      val toComponent   = to.dropRight(2)
+      if (isPrimitive(fromComponent) || isPrimitive(toComponent)) fromComponent == toComponent
+      else isSubtype(fromComponent, toComponent)
+    } else if (from.endsWith("[]")) {
+      Set("java.lang.Object", "java.lang.Cloneable", "java.io.Serializable").contains(to)
+    } else if (isPrimitive(from) || isPrimitive(to)) {
+      false
+    } else {
+      val visited                         = mutable.Set.empty[String]
+      def visit(current: String): Boolean =
+        current == to || (visited.add(current) && get(current).exists { info =>
+          directSupertypes(info).exists(visit)
+        })
+      visit(from)
+    }
+  }
+
+  def methodsFor(typeName: String, name: String): List[JavaMethodInfo] = {
+    val declared          = hierarchy(typeName).flatMap(_.methods.filter(_.name == name))
+    val withObjectMethods =
+      if (get(typeName).exists(_.isInterface))
+        get("java.lang.Object").toList.flatMap(_.methods.filter(method => method.name == name && method.isPublic))
+      else Nil
+    val seen = mutable.Set.empty[(String, List[String])]
+    (declared ++ withObjectMethods)
+      .filter(method => seen.add(method.name -> method.paramTypes))
+      .toList
+      .sortBy(method => (method.owner, method.fullName))
+  }
+
+  def memberType(typeName: String, memberName: String): Option[String] =
+    hierarchy(typeName).iterator
+      .flatMap { info =>
+        info.fields.get(memberName).filter(isUsableMemberType).iterator ++
+          info.methods.iterator
+            .filter(method =>
+              method.paramTypes.isEmpty && method.name == s"get${capitalize(memberName)}" &&
+                isUsableMemberType(method.returnType)
+            )
+            .map(_.returnType) ++
+          info.methods.iterator
+            .filter(method =>
+              method.paramTypes.isEmpty && method.name == s"is${capitalize(memberName)}" &&
+                isUsableMemberType(method.returnType)
+            )
+            .map(_.returnType)
+      }
+      .find(_.nonEmpty)
+
+  private def hierarchy(typeName: String): List[JavaTypeInfo] = {
+    val seen                                       = mutable.Set.empty[String]
+    def visit(current: String): List[JavaTypeInfo] =
+      if (!seen.add(current)) Nil
+      else
+        get(current).toList.flatMap { info =>
+          info +: directSupertypes(info).flatMap(visit)
+        }
+    visit(typeName)
+  }
+
+  private def directSupertypes(info: JavaTypeInfo): List[String] = {
+    val interfaces = info.interfaces.toList.sorted
+    if (info.fullName == "java.lang.Object") Nil
+    else if (info.isInterface) interfaces :+ "java.lang.Object"
+    else {
+      val superClass = info.superClass.toList
+      val explicit   = superClass ++ interfaces
+      if (superClass.contains("java.lang.Object")) explicit
+      else explicit :+ "java.lang.Object"
+    }
+  }
+
+  private def sourceTypeInfo(typeDecl: TypeDecl): JavaTypeInfo = {
+    val isInterface = typeDecl.code.contains("interface ")
+    val parents     = typeDecl.inheritsFromTypeFullName.toList
+    val superClass  =
+      if (isInterface) None
+      else parents.headOption.orElse(Option.when(typeDecl.fullName != "java.lang.Object")("java.lang.Object"))
+    val interfaces =
+      if (isInterface) parents
+      else parents.drop(superClass.size)
+
+    val methods = typeDecl.method.l.sortBy(_.fullName).map { method =>
+      val parameters = method.parameter.l.sortBy(_.index).filterNot(parameter => parameter.name == "this")
+      val paramTypes = parameters.map(_.typeFullName)
+      val signature  = method.signature
+      JavaMethodInfo(
+        typeDecl.fullName,
+        method.name,
+        paramTypes,
+        method.methodReturn.typeFullName,
+        method.modifier.exists(_.modifierType == "STATIC"),
+        parameters.lastOption.exists(_.isVariadic),
+        method.fullName,
+        signature,
+        method.modifier.exists(_.modifierType == "PUBLIC")
+      )
+    }
+    val fields = typeDecl.member.l.sortBy(_.name).map(member => member.name -> member.typeFullName).toMap
+    JavaTypeInfo(typeDecl.fullName, superClass, interfaces.sorted, isInterface, methods, fields)
+  }
+
+  private def indexClasspath(): Map[String, ClassLocation] = {
+    val index = mutable.LinkedHashMap.empty[String, ClassLocation]
+    classpath.foreach { pathString =>
+      val path = Paths.get(pathString)
+      if (!Files.exists(path)) {
+        logger.warn(s"Ignoring nonexistent --xom-classpath path '$pathString'")
+      } else if (Files.isDirectory(path)) {
+        val stream = Files.walk(path)
+        try {
+          stream
+            .iterator()
+            .asScala
+            .filter(file => Files.isRegularFile(file) && file.toString.endsWith(".class"))
+            .toList
+            .sortBy(_.toString)
+            .foreach { file =>
+              val relative = path.relativize(file)
+              index.getOrElseUpdate(className(relative.toString), DirectoryClass(path, relative))
+            }
+        } finally stream.close()
+      } else {
+        try {
+          val jar     = new JarFile(path.toFile)
+          val entries = jar.entries().asScala.filter(entry => !entry.isDirectory && entry.getName.endsWith(".class"))
+          entries.toList.sortBy(_.getName).foreach { entry =>
+            index.getOrElseUpdate(className(entry.getName), JarClass(path, entry.getName))
+          }
+          jar.close()
+        } catch {
+          case NonFatal(exception) =>
+            logger.warn(s"Ignoring unreadable --xom-classpath jar '$pathString'", exception)
+        }
+      }
+    }
+    index.toMap
+  }
+
+  private def className(classFilePath: String): String =
+    classFilePath.stripSuffix(".class").replace('\\', '/').replace('/', '.')
+
+  private def readClass(location: ClassLocation): Option[JavaTypeInfo] =
+    try {
+      val bytes = location match {
+        case DirectoryClass(root, relativePath) =>
+          Files.readAllBytes(root.resolve(relativePath))
+        case JarClass(path, entryName) =>
+          val jar = new JarFile(path.toFile)
+          try {
+            val entry = jar.getJarEntry(entryName)
+            val in    = jar.getInputStream(entry)
+            try in.readAllBytes()
+            finally in.close()
+          } finally jar.close()
+      }
+      Some(parseClass(bytes))
+    } catch {
+      case NonFatal(exception) =>
+        logger.warn(s"Unable to parse class from classpath location '$location'", exception)
+        None
+    }
+
+  private def readJdkClass(fullName: String): Option[JavaTypeInfo] =
+    jrtFileSystem.flatMap { fileSystem =>
+      val packageName = fullName.split('.').dropRight(1).mkString(".")
+      val classPath   = fullName.replace('.', '/') + ".class"
+      val packagePath = fileSystem.getPath("/packages", packageName)
+      if (!Files.exists(packagePath)) None
+      else {
+        val stream  = Files.list(packagePath)
+        val modules =
+          try stream.iterator().asScala.map(_.getFileName.toString).toList.sorted
+          finally stream.close()
+        modules.iterator
+          .map(module => fileSystem.getPath("/modules", module, classPath))
+          .find(path => Files.isRegularFile(path))
+          .map(path => Files.readAllBytes(path))
+          .map(parseClass)
+      }
+    }
+
+  private def parseClass(bytes: Array[Byte]): JavaTypeInfo = {
+    var owner       = ""
+    var superClass  = Option.empty[String]
+    var interfaces  = Seq.empty[String]
+    var isInterface = false
+    val methods     = mutable.ListBuffer.empty[JavaMethodInfo]
+    val fields      = mutable.LinkedHashMap.empty[String, String]
+
+    val visitor = new ClassVisitor(Opcodes.ASM9) {
+      override def visit(
+        version: Int,
+        access: Int,
+        name: String,
+        signature: String,
+        superName: String,
+        interfaceNames: Array[String]
+      ): Unit = {
+        owner = name.replace('/', '.')
+        superClass = Option(superName).map(_.replace('/', '.'))
+        interfaces = Option(interfaceNames).toSeq.flatten.map(_.replace('/', '.')).sorted
+        isInterface = (access & Opcodes.ACC_INTERFACE) != 0
+      }
+
+      override def visitField(
+        access: Int,
+        name: String,
+        descriptor: String,
+        signature: String,
+        value: Any
+      ): FieldVisitor = {
+        fields.getOrElseUpdate(name, Type.getType(descriptor).getClassName)
+        null
+      }
+
+      override def visitMethod(
+        access: Int,
+        name: String,
+        descriptor: String,
+        signature: String,
+        exceptions: Array[String]
+      ): MethodVisitor = {
+        val ignoredFlags = Opcodes.ACC_PRIVATE | Opcodes.ACC_SYNTHETIC | Opcodes.ACC_BRIDGE
+        if ((access & ignoredFlags) == 0) {
+          val methodType = Type.getMethodType(descriptor)
+          val paramTypes = methodType.getArgumentTypes.toList.map(_.getClassName)
+          val returnType = if (name == "<init>") "void" else methodType.getReturnType.getClassName
+          val methodSig  = s"$returnType(${paramTypes.mkString(",")})"
+          methods += JavaMethodInfo(
+            owner,
+            name,
+            paramTypes,
+            returnType,
+            (access & Opcodes.ACC_STATIC) != 0,
+            (access & Opcodes.ACC_VARARGS) != 0,
+            s"$owner.$name:$methodSig",
+            methodSig,
+            (access & Opcodes.ACC_PUBLIC) != 0
+          )
+        }
+        null
+      }
+    }
+    new ClassReader(bytes).accept(visitor, ClassReader.SKIP_CODE | ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES)
+    JavaTypeInfo(owner, superClass, interfaces, isInterface, methods.toList.sortBy(_.fullName), fields.toMap)
+  }
+
+  private def arrayType(fullName: String): Option[JavaTypeInfo] =
+    Option.when(fullName.endsWith("[]")) {
+      JavaTypeInfo(
+        fullName,
+        Some("java.lang.Object"),
+        Seq("java.lang.Cloneable", "java.io.Serializable"),
+        isInterface = false,
+        methods = Seq.empty,
+        fields = Map.empty
+      )
+    }
+
+  private def capitalize(value: String): String =
+    value.headOption.map(_.toUpper.toString + value.drop(1)).getOrElse(value)
+
+  private def isUsableMemberType(typeName: String): Boolean =
+    typeName.nonEmpty && typeName != "ANY" && typeName != "<unresolvedNamespace>"
+
+  private val PrimitiveTypes = Set("boolean", "byte", "short", "int", "long", "float", "double", "char", "void")
+}

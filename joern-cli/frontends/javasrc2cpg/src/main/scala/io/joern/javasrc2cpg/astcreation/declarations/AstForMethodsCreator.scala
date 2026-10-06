@@ -370,6 +370,7 @@ private[declarations] trait AstForMethodsCreator { this: AstCreator =>
       .typeFullName(typeFullName)
       .index(childNum)
       .order(childNum)
+      .isVariadic(parameter.isVarArgs)
     val annotationAsts = parameter.getAnnotations.asScala.map(astForAnnotationExpr)
     val ast            = Ast(parameterNode)
 
