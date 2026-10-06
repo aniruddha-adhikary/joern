@@ -3,6 +3,7 @@ package io.joern.arl2cpg
 import io.joern.arl2cpg.ArlFindings.{Codes, Keys}
 import io.joern.x2cpg.Defines
 import io.joern.x2cpg.X2Cpg
+import io.joern.x2cpg.frontendspecific.arl2cpg.ArlExport
 import io.shiftleft.codepropertygraph.generated.{Cpg, DispatchTypes, Operators}
 import io.shiftleft.codepropertygraph.generated.nodes.{Call, Identifier, Literal}
 import io.shiftleft.semanticcpg.language.*
@@ -92,7 +93,7 @@ ruleset R (S) {
         s"${arg.argumentIndex}:${arg.code}:$argType"
       }
       val finding = findingFor(cpg, value.id()).map { unresolved =>
-        s"${ArlFindings.reason(unresolved)}:${ArlFindings.value(unresolved, Keys.Candidates)}"
+        s"${ArlFindings.reason(unresolved)}:${ArlFindings.values(unresolved, Keys.Candidates)}"
       }
       s"method=${value.methodFullName}, type=${value.typeFullName}, args=$args, finding=$finding"
     }
@@ -475,7 +476,7 @@ ruleset R (S) {
       constructor.methodFullName should include("<unresolvedSignature>")
       val finding = findingFor(cpg, constructor.id()).get
       ArlFindings.reason(finding) shouldBe "no-candidate"
-      ArlFindings.value(finding, Keys.Candidates) shouldBe "loan.Sub.<init>:void(int)"
+      ArlFindings.values(finding, Keys.Candidates) shouldBe List("loan.Sub.<init>:void(int)")
     }
 
     "consider only public source methods" in withCpg(
@@ -546,11 +547,17 @@ ruleset R (S) {
       call.methodFullName should include("<unresolvedSignature>")
       val finding = findingFor(cpg, call.id()).get
       ArlFindings.reason(finding) shouldBe "ambiguous"
-      ArlFindings.value(finding, Keys.Candidates) shouldBe
-        List(
-          "loan.Util.choose:int(java.lang.Integer,java.lang.Object)",
-          "loan.Util.choose:int(java.lang.Object,java.lang.Integer)"
-        ).sorted.mkString(";")
+      val candidates = List(
+        "loan.Util.choose:int(java.lang.Integer,java.lang.Object)",
+        "loan.Util.choose:int(java.lang.Object,java.lang.Integer)"
+      ).sorted
+      ArlFindings.values(finding, Keys.Candidates) shouldBe candidates
+      val exportedFinding = ujson
+        .read(ArlExport.toJson(cpg, "overloads.cpg"))("findings")
+        .arr
+        .find(_.obj.get(Keys.CallId).contains(ujson.Str(call.id.toString)))
+        .get
+      exportedFinding(Keys.Candidates).arr.map(_.str).toList shouldBe candidates
     }
 
     "report no-candidate and unknown-receiver findings without tripping Gate 1" in withCpg(
