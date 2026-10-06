@@ -1,6 +1,7 @@
 package io.joern.arl2cpg
 
-import io.joern.arl2cpg.ArlFindings.{Codes, Keys}
+import io.joern.x2cpg.frontendspecific.arl2cpg.ArlFindings
+import io.joern.x2cpg.frontendspecific.arl2cpg.ArlFindings.{Codes, Keys}
 import io.joern.arl2cpg.testfixtures.Arl2CpgSuite
 import io.joern.x2cpg.X2Cpg
 import io.joern.x2cpg.frontendspecific.arl2cpg.ArlExport

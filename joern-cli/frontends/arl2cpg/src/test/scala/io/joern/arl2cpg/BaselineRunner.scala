@@ -1,5 +1,6 @@
 package io.joern.arl2cpg
 
+import io.joern.x2cpg.frontendspecific.arl2cpg.ArlFindings
 import io.joern.arl2cpg.parser.{ARLParser, ArlParserFacade}
 import io.shiftleft.codepropertygraph.generated.nodes.Unknown
 import io.shiftleft.semanticcpg.language.*
