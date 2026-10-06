@@ -124,5 +124,10 @@ public class LoanUtil {
       val callees = rule.call.callee(NoResolve).name.toSet
       callees should contain("getBankruptcyAge")
     }
+
+    "annotate non-external Java methods with arlKind xom" in withXomCpg { cpg =>
+      val method = cpg.method.name("compute").head
+      method.annotation.name("arlKind").parameterAssign.value.code.l shouldBe List("xom")
+    }
   }
 }

@@ -36,6 +36,11 @@ class AstCreator(
   protected val compilationUnit: ARLParser.CompilationUnitContext = parseResult.compilationUnit
   protected val fileContent: String                               = parseResult.content
 
+  protected def valueAnnotationAst(ctx: ParserRuleContext, annoName: String, value: String): Ast = {
+    val assign = annotationAssignmentAst("value", value, Ast(annotationLiteralNode(ctx, value)))
+    annotationAst(annotationNode(ctx, s"$annoName: $value", annoName, annoName), List(assign))
+  }
+
   /** Package declared via `package a.b;` (Designer files). */
   protected var packageName: Option[String] = None
 

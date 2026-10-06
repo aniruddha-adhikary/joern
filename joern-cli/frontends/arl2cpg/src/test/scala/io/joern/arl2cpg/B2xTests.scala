@@ -112,6 +112,7 @@ class B2xTests extends AnyWordSpec with Matchers with BeforeAndAfterAll {
       method.size shouldBe 1
       method.head.filename shouldBe loanB2x.toString
       method.head.code should include("this.setRejected(true)")
+      method.head.annotation.name("arlKind").parameterAssign.value.code.l shouldBe List("function")
       calls(withB2x, "outcome", "rejectWith", 2).map(_.methodFullName).toSet shouldBe Set(method.head.fullName)
       calls(withB2x, "outcome", "rejectWith", 2).foreach(c =>
         tags(c, ArlTags.ResolvesTo) shouldBe Set(method.head.fullName)

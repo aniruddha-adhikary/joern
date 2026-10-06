@@ -70,7 +70,7 @@ trait AstForFlow {
       params,
       body,
       methodReturnNode(ctx, "void"),
-      annotations = scope.toList.flatMap(meta =>
+      annotations = List(valueAnnotationAst(ctx, "arlKind", "ruleflow")) ++ scope.toList.flatMap(meta =>
         List(valueAnnotationAst(ctx, "ruleflowUuid", meta.uuid), valueAnnotationAst(ctx, "ruleflowName", meta.name))
       ) ++ List(valueAnnotationAst(ctx, "ruleflowScope", ruleflowScopeState(name)))
     )
@@ -135,7 +135,7 @@ trait AstForFlow {
       params,
       body,
       methodReturnNode(ctx, "void"),
-      annotations = scopeAnnotationAsts(ctx, name, scope, identity)
+      annotations = valueAnnotationAst(ctx, "arlKind", "flowtask") :: scopeAnnotationAsts(ctx, name, scope, identity)
     )
     currentTaskScope = prevScope
     valueScope.pop()
@@ -175,7 +175,8 @@ trait AstForFlow {
       thisAst +: params,
       body,
       methodReturnNode(ctx, "void"),
-      annotations = scopeAnnotationAsts(ctx, name, scope, identity)
+      annotations =
+        valueAnnotationAst(ctx, "arlKind", "functiontask") :: scopeAnnotationAsts(ctx, name, scope, identity)
     )
     currentTaskScope = prevScope
     valueScope.pop()
@@ -252,11 +253,6 @@ trait AstForFlow {
     if (scope.isDefined) "resolved"
     else if (duplicateTaskNames.contains(name) && (rflMeta.nonEmpty || taskIdentity.records.nonEmpty)) "ambiguous"
     else "unknown"
-
-  private def valueAnnotationAst(ctx: ParserRuleContext, annoName: String, value: String): Ast = {
-    val assign = annotationAssignmentAst("value", value, Ast(annotationLiteralNode(ctx, value)))
-    annotationAst(annotationNode(ctx, s"$annoName: $value", annoName, annoName), List(assign))
-  }
 
   /** `ruleflowUuid`/`ruleflowName`/`ruleflowScope` annotations for a task or ruleflow method, plus the
     * `taskIdentity*`/`taskQualifiedName` provenance annotations when a sidecar record scoped the declaration.
@@ -395,8 +391,8 @@ trait AstForFlow {
       thisAst +: params,
       body,
       methodReturnNode(ctx, "void"),
-      annotations =
-        (propAnnotations :+ rulesAnnotation :+ selectionAnnotation) ++ scopeAnnotationAsts(ctx, name, scope, identity)
+      annotations = valueAnnotationAst(ctx, "arlKind", "ruletask") ::
+        ((propAnnotations :+ rulesAnnotation :+ selectionAnnotation) ++ scopeAnnotationAsts(ctx, name, scope, identity))
     )
     valueScope.pop()
     currentTaskScope = prevScope
@@ -432,10 +428,10 @@ trait AstForFlow {
     SelectLowered(Option(ref), Option(selAst))
   }
 
-  /** Selector entries: `pkg.rule` exact, `pkg.*` the rules directly in package `pkg` (not in its sub-packages: a
-    * rule task lists each sub-package separately, and IBM's compiled TaskDefinition members confirm it), `*` all.
-    * Whitespace runs are normalized — compiled selectors may pad names differently than the rule declarations
-    * (`GBP D_01` ≡ `GBP D_01`).
+  /** Selector entries: `pkg.rule` exact, `pkg.*` the rules directly in package `pkg` (not in its sub-packages: a rule
+    * task lists each sub-package separately, and IBM's compiled TaskDefinition members confirm it), `*` all. Whitespace
+    * runs are normalized — compiled selectors may pad names differently than the rule declarations (`GBP D_01` ≡
+    * `GBP D_01`).
     */
   private def selectorMatchingRules(entry: String): List[String] = {
     val normalized = entry.replaceAll("\\s+", " ").trim
@@ -562,7 +558,12 @@ trait AstForFlow {
       .typeFullName(Defines.Any)
       .lineNumber(line(ctx))
       .columnNumber(column(ctx))
-    blockAst(block, astForFlowSeqStatements(ctx.flowSeq()))
+    val jumpTarget = NewJumpTarget()
+      .name(label)
+      .code(s"$label:")
+      .lineNumber(line(ctx))
+      .columnNumber(column(ctx))
+    blockAst(block, Ast(jumpTarget) :: astForFlowSeqStatements(ctx.flowSeq()))
   }
 
   /** `goto L;` → CONTROL_STRUCTURE GOTO. */
