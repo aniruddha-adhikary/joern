@@ -71,7 +71,8 @@ ruleset R (S) {
         json("cpgFile").str.shouldBe("loan-rules.cpg")
 
         val methods    = json("methods").arr
-        val methodKeys = List("id", "name", "fullName", "signature", "filename", "line", "lineEnd", "arlKind", "nodes")
+        val methodKeys =
+          List("id", "stableId", "name", "fullName", "signature", "filename", "line", "lineEnd", "arlKind", "nodes")
         methods.foreach { method =>
           method.obj.keys.toList.shouldBe(methodKeys)
           method("id").num
@@ -189,13 +190,13 @@ ruleset R (S) {
 
         val types = json("types").arr
         types.foreach { typeDecl =>
-          typeDecl.obj.keys.toList.shouldBe(List("id", "name", "fullName", "file", "inherits", "members"))
+          typeDecl.obj.keys.toList.shouldBe(List("id", "stableId", "name", "fullName", "file", "inherits", "members"))
           typeDecl("id").num
           typeDecl("file").str
           typeDecl("inherits").arr.map(_.str).toList.shouldBe(typeDecl("inherits").arr.map(_.str).sorted.toList)
           val members = typeDecl("members").arr
           members.foreach { member =>
-            member.obj.keys.toList.shouldBe(List("id", "name", "typeFullName", "code", "line"))
+            member.obj.keys.toList.shouldBe(List("id", "stableId", "name", "typeFullName", "code", "line"))
             member("id").num
             member("typeFullName").str
             member("code").str
@@ -231,8 +232,17 @@ ruleset R (S) {
         findings.nonEmpty.shouldBe(true)
         findings.exists(finding => finding.obj.contains("code") && finding.obj.contains("reason")).shouldBe(true)
         findings.foreach(_.obj.values.foreach(_.str))
+        val stableIdsByNodeId = json("methods").arr
+          .flatMap(_("nodes").arr)
+          .map(node => node("id").num.toLong -> node("stableId").str)
+          .toMap
         val expectedFindings = cpg.finding.l.sortBy(_.id).map { finding =>
-          finding.keyValuePairs.map(pair => pair.key -> pair.value).toList.sortBy(_._1)
+          val pairs = finding.keyValuePairs.map(pair => pair.key -> pair.value).toList
+          val withCallStableId = pairs.find(_._1 == "callId") match {
+            case None              => pairs
+            case Some((_, callId)) => pairs :+ ("callStableId" -> stableIdsByNodeId(callId.toLong))
+          }
+          withCallStableId.sortBy(_._1)
         }
         val actualFindings = findings.map { finding =>
           finding.obj.toList.map { case (key, value) => key -> value.str }.sortBy(_._1)
