@@ -292,6 +292,20 @@ trait AstForExpressions {
       acc
     }
 
+    def packageQualifiedTypePrefix: Option[(String, List[String])] = {
+      val typeSegmentLimit = segments.size - (if (hasArgs) 1 else 0)
+      val start            = (1 until typeSegmentLimit).find { k =>
+        segments.take(k).forall(_.headOption.exists(_.isLower)) &&
+        segments(k).headOption.exists(_.isUpper)
+      }
+      start.map { k =>
+        val classSegmentCount =
+          segments.drop(k + 1).take(typeSegmentLimit - k - 1).takeWhile(_.headOption.exists(_.isUpper)).size
+        val typeSegmentCount = k + 1 + classSegmentCount
+        (segments.take(typeSegmentCount).mkString("."), segments.drop(typeSegmentCount))
+      }
+    }
+
     if (isBoundValue(first) || implicitReceiver.top.exists { case (n, _) => n == first }) {
       // binding / local / task param
       val tpe =
@@ -338,6 +352,30 @@ trait AstForExpressions {
       } else {
         val baseIdent = Ast(identifierNode(ctx, first, first, resolveTypeName(first)))
         dynamicSuffix(baseIdent, rest, List.empty, hasTrailingArgs = false)
+      }
+    } else if (
+      implicitReceiver.top.isEmpty &&
+      !isBoundValue(first) &&
+      !signatureMembers.contains(first) &&
+      !isLikelyTypeName(first) &&
+      packageQualifiedTypePrefix.isDefined
+    ) {
+      val (typeName, remaining) = packageQualifiedTypePrefix.get
+      if (hasArgs && remaining.size == 1) {
+        val method = remaining.head
+        val call   = callNode(
+          ctx,
+          fullCode,
+          method,
+          unresolvedMethodFullName(typeName, method, argAsts.size),
+          DispatchTypes.STATIC_DISPATCH,
+          Option(s"${Defines.UnresolvedSignature}(${argAsts.size})"),
+          Option(Defines.Any)
+        )
+        callAst(call, argAsts)
+      } else {
+        val base = Ast(identifierNode(ctx, typeName, typeName, typeName))
+        dynamicSuffix(base, remaining, argAsts, hasArgs)
       }
     } else if (implicitReceiver.top.isDefined && !isLikelyTypeName(first)) {
       // unqualified name inside a pattern test → resolve against the pattern's own binding

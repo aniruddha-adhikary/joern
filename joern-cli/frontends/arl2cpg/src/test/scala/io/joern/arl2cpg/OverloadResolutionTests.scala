@@ -1,6 +1,7 @@
 package io.joern.arl2cpg
 
 import io.joern.arl2cpg.ArlFindings.{Codes, Keys}
+import io.joern.x2cpg.Defines
 import io.joern.x2cpg.X2Cpg
 import io.shiftleft.codepropertygraph.generated.{Cpg, DispatchTypes, Operators}
 import io.shiftleft.codepropertygraph.generated.nodes.{Call, Identifier, Literal}
@@ -123,9 +124,30 @@ ruleset R (S) {
           |""".stripMargin,
       "ilog/rules/brl/Date.java" ->
         """package ilog.rules.brl;
-          |public class Date {
+          |public class Date extends java.util.Date {
           |  public String name;
           |  public String getCode() { return name; }
+          |  public Date() { super(); }
+          |}
+          |""".stripMargin,
+      "ilog/rules/brl/IlrCollectionUtil.java" ->
+        """package ilog.rules.brl;
+          |public class IlrCollectionUtil {
+          |  public static boolean isIn(java.util.Collection values, Object value) { return false; }
+          |  public static int getSize(java.util.Collection values) { return values.size(); }
+          |  public static int getSize(Object[] values) { return values.length; }
+          |}
+          |""".stripMargin,
+      "ilog/rules/brl/SimpleDate.java" ->
+        """package ilog.rules.brl;
+          |public class SimpleDate {
+          |  public SimpleDate(long value) { }
+          |}
+          |""".stripMargin,
+      "ilog/rules/brl/Engine.java" ->
+        """package ilog.rules.brl;
+          |public class Engine {
+          |  public void note(String value) { }
           |}
           |""".stripMargin,
       "pkg/Outer.java" ->
@@ -696,6 +718,135 @@ ruleset R (S) {
       }
       val parsed = Main.parseConfig(Array("--xom-classpath", "first.jar", "--xom-classpath", "classes"))
       parsed.map(_.xomClasspath) shouldBe Some(Seq("first.jar", "classes"))
+    }
+
+    "resolve package-qualified static types, fields, and instance receivers" in {
+      FileUtil.usingTemporaryDirectory("arl2cpg-package-qualified-types") { dir =>
+        val (jar, _) = compileStubSources(dir)
+        val body     =
+          """ilog.rules.brl.IlrCollectionUtil.isIn(this.items, "x");
+            |IlrCollectionUtil.isIn(this.items, "x");
+            |IlrCollectionUtil.getSize(this.items);
+            |new ilog.rules.brl.SimpleDate(0L);
+            |new java.math.BigDecimal(1);
+            |d1.before(d2);
+            |java.lang.Boolean.valueOf(this.borrower.lastName.isEmpty());
+            |java.lang.System.out.println("x");
+            |ilog.rules.brl.Engine.this.note("x");
+            |foo.bar.baz(1);
+            |""".stripMargin
+        val imports = Seq(
+          "import java.util.List;",
+          "import java.math.BigDecimal;",
+          "import ilog.rules.brl.Date;",
+          "import ilog.rules.brl.IlrCollectionUtil;"
+        )
+        val signatureFields =
+          "public in List items = null; public in Date d1 = null; public in Date d2 = null; " +
+            "public in Borrower borrower = null;"
+        val javaSources = Map(
+          "loan/Borrower.java" ->
+            """package loan;
+              |public class Borrower { public String lastName; }
+              |""".stripMargin
+        )
+        val allImports     = (Seq("import loan.Borrower;") ++ imports).distinct.mkString("\n")
+        val arlWithPattern =
+          s"""$allImports
+             |public signature S extends java.lang.Object {
+             |  $signatureFields
+             |}
+             |ruleset R (S) {
+             |  rule `resolution.test` {
+             |    when {
+             |      Borrower(lastName.equalsIgnoreCase("pattern")) from borrower;
+             |    }
+             |    then {
+             |      $body
+             |    }
+             |  }
+             |}
+             |""".stripMargin
+        Files.writeString(dir.resolve("rules.arl"), arlWithPattern)
+        val xomDir = dir.resolve("xom")
+        Files.createDirectories(xomDir.resolve("loan"))
+        Files.writeString(xomDir.resolve("loan/Borrower.java"), javaSources("loan/Borrower.java"))
+        val config = Config()
+          .withInputPath(dir.toString)
+          .withXomSrcPaths(Set(xomDir.toString))
+          .withXomClasspath(Seq(jar.toString))
+          .withAllowUnknown(true)
+        val cpg = new Arl2Cpg().createCpg(config).get
+        try {
+          def expectConstructor(codeFragment: String, methodFullName: String, typeFullName: String): Unit = {
+            val call = cpg.call.nameExact("<init>").find(_.code.contains(codeFragment)).get
+            call.methodFullName shouldBe methodFullName
+            call.typeFullName shouldBe typeFullName
+            call.dispatchType shouldBe DispatchTypes.DYNAMIC_DISPATCH
+          }
+
+          expectCall(
+            cpg,
+            "isIn",
+            """ilog.rules.brl.IlrCollectionUtil.isIn(this.items, "x")""",
+            "ilog.rules.brl.IlrCollectionUtil.isIn:boolean(java.util.Collection,java.lang.Object)",
+            "boolean"
+          )
+          expectCall(
+            cpg,
+            "isIn",
+            """IlrCollectionUtil.isIn(this.items, "x")""",
+            "ilog.rules.brl.IlrCollectionUtil.isIn:boolean(java.util.Collection,java.lang.Object)",
+            "boolean"
+          )
+          expectCall(
+            cpg,
+            "getSize",
+            "IlrCollectionUtil.getSize(this.items)",
+            "ilog.rules.brl.IlrCollectionUtil.getSize:int(java.util.Collection)",
+            "int"
+          )
+          expectConstructor("SimpleDate", "ilog.rules.brl.SimpleDate.<init>:void(long)", "ilog.rules.brl.SimpleDate")
+          expectConstructor("BigDecimal", "java.math.BigDecimal.<init>:void(int)", "java.math.BigDecimal")
+          expectCall(
+            cpg,
+            "before",
+            "d1.before(d2)",
+            "java.util.Date.before:boolean(java.util.Date)",
+            "boolean",
+            DispatchTypes.DYNAMIC_DISPATCH
+          )
+          expectCall(
+            cpg,
+            "valueOf",
+            "java.lang.Boolean.valueOf(this.borrower.lastName.isEmpty())",
+            "java.lang.Boolean.valueOf:java.lang.Boolean(boolean)",
+            "java.lang.Boolean"
+          )
+          expectCall(
+            cpg,
+            "println",
+            """java.lang.System.out.println("x")""",
+            "java.io.PrintStream.println:void(java.lang.String)",
+            "void",
+            DispatchTypes.DYNAMIC_DISPATCH
+          )
+          expectCall(
+            cpg,
+            "note",
+            """ilog.rules.brl.Engine.this.note("x")""",
+            "ilog.rules.brl.Engine.note:void(java.lang.String)",
+            "void",
+            DispatchTypes.DYNAMIC_DISPATCH
+          )
+          val lowercaseCall = findCall(cpg, "baz", "foo.bar.baz(1)").get
+          lowercaseCall.dispatchType shouldBe DispatchTypes.DYNAMIC_DISPATCH
+          lowercaseCall.methodFullName shouldBe s"${Defines.UnresolvedNamespace}.baz:${Defines.UnresolvedSignature}(2)"
+          ArlFindings.reason(findingFor(cpg, lowercaseCall.id()).get) shouldBe "receiver-unknown"
+          cpg.call.nameExact("equalsIgnoreCase").l.map(_.methodFullName).distinct shouldBe
+            List("java.lang.String.equalsIgnoreCase:boolean(java.lang.String)")
+        } finally cpg.close()
+      }
     }
 
     "resolve dotted nested classpath and JDK types" in {
