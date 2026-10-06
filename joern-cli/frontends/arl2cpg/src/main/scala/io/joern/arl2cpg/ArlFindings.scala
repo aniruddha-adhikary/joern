@@ -108,6 +108,12 @@ object ArlTags {
   /** value: the reason (see [[ArlFindings.Reasons]]) the call may affect its receiver in ways we cannot see. */
   val MayAffect = "ARL_MAY_AFFECT"
 
+  /** value: `true` when an interval literal's lower bound is closed (`[`), otherwise `false`. */
+  val IntervalLowerClosed = "ARL_INTERVAL_LOWER_CLOSED"
+
+  /** value: `true` when an interval literal's upper bound is closed (`]`), otherwise `false`. */
+  val IntervalUpperClosed = "ARL_INTERVAL_UPPER_CLOSED"
+
   def tag(builder: DiffGraphBuilder, node: AbstractNode, name: String, value: String): NewTag = {
     val tag = NewTag().name(name).value(value)
     builder.addNode(tag)

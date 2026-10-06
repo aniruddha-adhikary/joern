@@ -6,6 +6,7 @@ import io.joern.x2cpg.{Ast, Defines}
 import io.shiftleft.codepropertygraph.generated.nodes.*
 import io.shiftleft.codepropertygraph.generated.{ControlStructureTypes, DispatchTypes, Operators}
 import org.antlr.v4.runtime.ParserRuleContext
+import org.antlr.v4.runtime.misc.Interval
 import org.antlr.v4.runtime.tree.TerminalNode
 
 import scala.jdk.CollectionConverters.*
@@ -417,11 +418,21 @@ trait AstForExpressions {
     }
   }
 
-  /** `[0,1]` / `]a,b[` → CALL `<operator>.interval(lo, hi)`, code = source text; trailing `.selector` chain applied. */
+  /** `[0,1]` / `]a,b[` → CALL `<operator>.interval(lo, hi)`; trailing `.selector` chain applied. */
   private def astForInterval(ctx: ARLParser.IntervalLiteralContext): Ast = {
-    val exprs = ctx.expression().asScala.toList.map(astForExpression)
-    val call  = operatorCallNode(ctx, code(ctx).takeWhile(_ != '.'), ArlOperators.interval, Option(Defines.Any))
-    var acc   = callAst(call, exprs)
+    val expressions           = ctx.expression().asScala.toList
+    val children              = ctx.children.asScala.toList
+    val secondExpressionIndex = children.indexWhere(_ eq expressions.last)
+    val closingBracket        =
+      children.drop(secondExpressionIndex + 1).collectFirst { case terminal: TerminalNode => terminal.getSymbol }.get
+    val startToken   = ctx.getStart
+    val intervalCode = Option(startToken.getInputStream)
+      .map(_.getText(Interval.of(startToken.getStartIndex, closingBracket.getStopIndex)))
+      .getOrElse(fileContent.substring(startToken.getStartIndex, closingBracket.getStopIndex + 1))
+    val exprs = expressions.map(astForExpression)
+    val call  = operatorCallNode(ctx, intervalCode, ArlOperators.interval, Option(Defines.Any))
+    queueIntervalTags(call, startToken.getStartIndex, startToken.getText == "[", closingBracket.getText == "]")
+    var acc = callAst(call, exprs)
     ctx.selector().asScala.toList.foreach { sel =>
       acc = astForSelector(sel, acc)
     }

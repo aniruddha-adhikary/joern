@@ -17,7 +17,10 @@ object ArlOperators {
   /** `exists { classPatterns }` — working-memory existence check over patterns. */
   val exists = "<operator>.exists"
 
-  /** `[0,1]` / `]a,b[` — ARL interval literal. */
+  /** ARL interval literal: argument 1 is the lower bound and argument 2 the upper bound. The CALL carries boolean
+    * `ARL_INTERVAL_LOWER_CLOSED` and `ARL_INTERVAL_UPPER_CLOSED` TAGs; `code` preserves the full bracketed interval
+    * source text, including internal whitespace and excluding trailing selectors.
+    */
   val interval = "<operator>.interval"
 
   /** `select (T r) { ... }` on a ruletask — dynamic rule filter over the candidate rules (its arguments). */
