@@ -38,7 +38,13 @@ class XomLinkerPass(cpg: Cpg, xomClasspath: Seq[String] = Seq.empty, b2x: Option
       .l
       .filter(_.code.startsWith("signature "))
       .sortBy(typeDecl => (typeDecl.fullName, typeDecl.filename))
-    val typeModel      = new TypeModel(sourceDecls ++ signatureDecls, xomClasspath)
+    val uniqueSignatureDecls = signatureDecls
+      .groupBy(_.fullName)
+      .values
+      .collect { case Seq(signature) => signature }
+      .toSeq
+      .sortBy(typeDecl => (typeDecl.fullName, typeDecl.filename))
+    val typeModel      = new TypeModel(sourceDecls ++ uniqueSignatureDecls, xomClasspath)
     val xomSimpleNames = sourceDecls
       .map(td => td.name -> td.fullName)
       .groupBy(_._1)

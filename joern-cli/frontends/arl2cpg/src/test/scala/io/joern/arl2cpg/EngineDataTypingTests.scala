@@ -1,6 +1,7 @@
 package io.joern.arl2cpg
 
 import io.joern.arl2cpg.ArlFindings.{Codes, Keys}
+import io.joern.x2cpg.Defines
 import io.shiftleft.codepropertygraph.generated.Cpg
 import io.shiftleft.codepropertygraph.generated.nodes.Call
 import io.shiftleft.semanticcpg.language.*
@@ -119,6 +120,36 @@ class EngineDataTypingTests extends AnyWordSpec with Matchers {
       val finding = unresolvedFinding(cpg, call).get
       ArlFindings.reason(finding) shouldBe "receiver-unknown"
       ArlFindings.value(finding, Keys.ReceiverType) shouldBe "ANY"
+    }
+
+    "leave duplicate signature fullNames ambiguous" in withCpg(
+      Map(
+        "rules-a.arl" ->
+          """import loan.Borrower;
+            |public signature EngineDataClass extends java.lang.Object {
+            |  public in Borrower borrower = null;
+            |}
+            |ruleset A (EngineDataClass) {
+            |  rule `duplicate.test` {
+            |    then {
+            |      this.borrower.lastName.equalsIgnoreCase("x");
+            |    }
+            |  }
+            |}
+            |""".stripMargin,
+        "signature-b.arl" ->
+          """import loan.LoanRequest;
+            |public signature EngineDataClass extends java.lang.Object {
+            |  public in LoanRequest loan = null;
+            |}
+            |""".stripMargin
+      )
+    ) { cpg =>
+      val call    = cpg.call.nameExact("equalsIgnoreCase").head
+      val finding = unresolvedFinding(cpg, call).get
+      call.methodFullName should include(Defines.UnresolvedSignature)
+      call.methodFullName should not be "java.lang.String.equalsIgnoreCase:boolean(java.lang.String)"
+      ArlFindings.reason(finding) shouldBe "receiver-unknown"
     }
 
     "resolve contains as synthetic ARL array membership" in withCpg(
