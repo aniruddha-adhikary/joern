@@ -10,6 +10,8 @@ import scopt.OParser
   *   Java sources of the eXecution Object Model, imported into the same CPG.
   * @param xomClasspath
   *   ordered classpath jars or directories used to resolve XOM methods.
+  * @param bomRoots
+  *   selected roots within the XOM classpath, replacing the default IBM engine boot BOM root.
   * @param taskIdentityPaths
   *   task identity sidecars (JSON lines) tying flattened task declarations to authored ruleflow uuids.
   * @param b2xPath
@@ -21,6 +23,8 @@ import scopt.OParser
 final case class Config(
   xomSrcPaths: Set[String] = Set.empty,
   xomClasspath: Seq[String] = Seq.empty,
+  bomPaths: Seq[String] = Seq.empty,
+  bomRoots: Seq[String] = Seq.empty,
   rflSrcPaths: Set[String] = Set.empty,
   taskIdentityPaths: Set[String] = Set.empty,
   b2xPath: Option[String] = None,
@@ -34,6 +38,10 @@ final case class Config(
   def withXomSrcPaths(paths: Set[String]): Config = copy(xomSrcPaths = paths)
 
   def withXomClasspath(paths: Seq[String]): Config = copy(xomClasspath = paths)
+
+  def withBomPaths(paths: Seq[String]): Config = copy(bomPaths = paths)
+
+  def withBomRoots(paths: Seq[String]): Config = copy(bomRoots = paths)
 
   def withRflSrcPaths(paths: Set[String]): Config = copy(rflSrcPaths = paths)
 
@@ -63,6 +71,17 @@ private object Frontend {
         .text(
           "jar or classes directory containing XOM types used to resolve Java calls. Repeatable; paths are searched " +
             "in command-line order after --xom-src types and before JDK types."
+        ),
+      opt[String]("bom")
+        .unbounded()
+        .action((path, config) => config.withBomPaths(config.bomPaths :+ path))
+        .text("BOM file or directory used to resolve model members. Repeatable; directories are searched recursively."),
+      opt[String]("bom-root")
+        .unbounded()
+        .action((path, config) => config.withBomRoots(config.bomRoots :+ path))
+        .text(
+          "BOM root entry or file path. Repeatable; replaces the default IBM engine boot root " +
+            "ilog/rules/bom/boot.bom and loads each root's include closure."
         ),
       opt[String]("rfl-src")
         .unbounded()

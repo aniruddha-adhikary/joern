@@ -3,6 +3,8 @@ package io.joern.arl2cpg.passes
 import io.joern.x2cpg.frontendspecific.arl2cpg.ArlFindings
 import io.joern.x2cpg.frontendspecific.arl2cpg.ArlFindings.{Codes, Keys}
 import io.joern.arl2cpg.b2x.B2xModel
+import io.joern.arl2cpg.bom.BomModel
+import io.joern.arl2cpg.passes.resolution.BomOrigin
 import io.joern.arl2cpg.passes.resolution.{JavaMethodInfo, TypeModel}
 import io.joern.x2cpg.Defines
 import io.shiftleft.codepropertygraph.generated.nodes.*
@@ -13,8 +15,12 @@ import io.shiftleft.semanticcpg.language.*
 import scala.collection.mutable
 
 /** Links ARL calls against Java XOM, classpath, and JDK types using statically inferred argument types. */
-class XomLinkerPass(cpg: Cpg, xomClasspath: Seq[String] = Seq.empty, b2x: Option[B2xModel] = None)
-    extends CpgPass(cpg) {
+class XomLinkerPass(
+  cpg: Cpg,
+  xomClasspath: Seq[String] = Seq.empty,
+  b2x: Option[B2xModel] = None,
+  bom: BomModel = BomModel.empty
+) extends CpgPass(cpg) {
 
   private val MaxIterations   = 30
   private val NullType        = "null"
@@ -28,19 +34,32 @@ class XomLinkerPass(cpg: Cpg, xomClasspath: Seq[String] = Seq.empty, b2x: Option
     methodFullName: String,
     signature: String,
     returnType: String,
-    isStatic: Boolean
+    isStatic: Boolean,
+    bom: Option[BomOrigin]
   )
 
   override def run(builder: DiffGraphBuilder): Unit = {
+    bom.diagnostics.foreach { diagnostic =>
+      ArlFindings.finding(
+        builder,
+        None,
+        diagnostic.code,
+        diagnostic.code,
+        diagnostic.message,
+        diagnostic.file,
+        None,
+        diagnostic.additionalKeyValues
+      )
+    }
     val sourceDecls    = cpg.typeDecl.isExternal(false).filenameNot(".*\\.arl$").l
     val signatureDecls = cpg.typeDecl
       .filename(".*\\.arl$")
       .l
       .filter(_.code.startsWith("signature "))
       .sortBy(typeDecl => (typeDecl.fullName, typeDecl.filename))
-    val typeModel      = new TypeModel(sourceDecls ++ signatureDecls, xomClasspath)
-    val xomSimpleNames = sourceDecls
-      .map(td => td.name -> td.fullName)
+    val typeModel      = new TypeModel(sourceDecls ++ signatureDecls, xomClasspath, bom)
+    val xomSimpleNames = (sourceDecls.map(td => td.name -> td.fullName) ++
+      bom.types.map(source => source.declaration.name -> source.declaration.fullName))
       .groupBy(_._1)
       .view
       .mapValues(_.map(_._2).distinct.sorted)
@@ -477,7 +496,8 @@ class XomLinkerPass(cpg: Cpg, xomClasspath: Seq[String] = Seq.empty, b2x: Option
             val returnType =
               if (method.name == Defines.ConstructorMethodName) constructorType(call, method) else method.returnType
             updateType(call, returnType)
-            nextResolutions(call.id()) = ResolvedCall(method.fullName, method.signature, returnType, method.isStatic)
+            nextResolutions(call.id()) =
+              ResolvedCall(method.fullName, method.signature, returnType, method.isStatic, method.bom)
           case _: Unresolved =>
             if (previousResolutions.contains(call.id()) && originalTypes.get(call.id()).contains(Defines.Any)) {
               updateType(call, Defines.Any)
@@ -532,7 +552,8 @@ class XomLinkerPass(cpg: Cpg, xomClasspath: Seq[String] = Seq.empty, b2x: Option
           val returnType =
             if (method.name == Defines.ConstructorMethodName) constructorType(call, method) else method.returnType
           types(call.id()) = returnType
-          resolvedCalls(call.id()) = ResolvedCall(method.fullName, method.signature, returnType, method.isStatic)
+          resolvedCalls(call.id()) =
+            ResolvedCall(method.fullName, method.signature, returnType, method.isStatic, method.bom)
         case _: Unresolved =>
           resolvedCalls.remove(call.id())
           if (originalTypes.get(call.id()).contains(Defines.Any)) types(call.id()) = Defines.Any
@@ -551,6 +572,32 @@ class XomLinkerPass(cpg: Cpg, xomClasspath: Seq[String] = Seq.empty, b2x: Option
         builder.setNodeProperty(node, PropertyNames.Signature, resolved.signature)
         if (resolved.isStatic) {
           builder.setNodeProperty(node, PropertyNames.DispatchType, DispatchTypes.STATIC_DISPATCH)
+        }
+      }
+    }
+
+    typeModel.bomDiagnostics.foreach { diagnostic =>
+      ArlFindings.finding(builder, None, diagnostic.code, diagnostic.code, diagnostic.message, diagnostic.file, None)
+    }
+
+    resolvedCalls.toList.sortBy(_._1).foreach { case (id, resolved) =>
+      resolved.bom.foreach { origin =>
+        nodesById.get(id).collect { case call: Call =>
+          val filename = call.file.name.headOption.getOrElse("")
+          ArlFindings.finding(
+            builder,
+            Some(call),
+            Codes.BomMember,
+            Codes.BomMember,
+            s"resolved Java call '${call.code}' through BOM member '${resolved.methodFullName}'",
+            filename,
+            call.lineNumber,
+            List(
+              Keys.CallId -> call.id().toString,
+              "bomFile"   -> origin.file,
+              "bomMember" -> resolved.methodFullName
+            ) ++ origin.translation.map(value => "translation" -> value).toList
+          )
         }
       }
     }

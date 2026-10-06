@@ -7,11 +7,11 @@ import io.shiftleft.semanticcpg.language.*
 /** The machine-readable vocabulary arl2cpg uses to say what it could not do.
   *
   * Every gap in the graph is a FINDING node (see [[ArlFindings.finding]]) whose `evidence` is the node the gap belongs
-  * to and whose key/value pairs carry a `code`, a `reason`, a centrally-derived severity, and location. Candidate
-  * values are repeated key/value pairs and are declared list-valued in [[ListValuedKeys]]. Effects of calls are TAG
-  * nodes on the CALL (see [[ArlTags]]). Neither ever replaces an AST node: the CPG stays a faithful lowering, and the
-  * findings are the honest remainder — arlgraph's "never lose an edge, never guess" invariants (DESIGN.md §0) in CPG
-  * terms.
+  * to and whose key/value pairs carry a `code`, a `reason`, a centrally-derived severity, and location. Candidate and
+  * skipped-BOM-file values are repeated key/value pairs and are declared list-valued in [[ListValuedKeys]]. Effects of
+  * calls are TAG nodes on the CALL (see [[ArlTags]]). Neither ever replaces an AST node: the CPG stays a faithful
+  * lowering, and the findings are the honest remainder — arlgraph's "never lose an edge, never guess" invariants
+  * (DESIGN.md §0) in CPG terms.
   */
 object ArlFindings {
 
@@ -27,9 +27,10 @@ object ArlFindings {
     val CallId       = "callId"
     val Candidates   = "candidates"
     val ReceiverType = "receiverType"
+    val BomFiles     = "bomFiles"
   }
 
-  val ListValuedKeys: Set[String] = Set(Keys.Candidates)
+  val ListValuedKeys: Set[String] = Set(Keys.Candidates, Keys.BomFiles)
 
   val Author = "arl2cpg"
 
@@ -50,6 +51,12 @@ object ArlFindings {
 
     /** A Java call whose target could not be chosen from the receiver and static argument types. */
     val UnresolvedCallTarget = "unresolved-call-target"
+
+    val BomMember         = "bom-member"
+    val BomTypeUnresolved = "bom-type-unresolved"
+    val BomDuplicateClass = "bom-duplicate-class"
+    val BomIncludeMissing = "bom-include-missing"
+    val BomFilesNotLoaded = "bom-files-not-loaded"
   }
 
   /** Reasons a call's effects stay unresolved (ported from arlgraph `Lowering.b2xEffects`). */
@@ -65,17 +72,23 @@ object ArlFindings {
     val B2xBodyCallsMethodWithoutBody = "b2x-body-calls-method-without-body"
   }
 
-  /** Severity mapping: `unknown-construct` and `syntax-error` are `error`; `unresolved-call-target` is `unresolved`;
-    * `unresolved-call-effects` is `info` only for `callee-body-not-in-artifact` and `unresolved` otherwise; and
-    * `b2x-unmodelled-element` is `unresolved`. An unknown code fails instead of receiving a default.
+  /** Severity mapping: `unknown-construct` and `syntax-error` are `error`; `unresolved-call-target`,
+    * `bom-type-unresolved`, `bom-duplicate-class`, `bom-include-missing`, and `b2x-unmodelled-element` are
+    * `unresolved`; `unresolved-call-effects` is `info` only for `callee-body-not-in-artifact` and `unresolved`
+    * otherwise; `bom-member` and `bom-files-not-loaded` are `info`. An unknown code fails instead of receiving a
+    * default.
     */
   private[arl2cpg] def severity(code: String, reason: String): String = (code, reason) match {
-    case (Codes.UnknownConstruct | Codes.SyntaxError, _)                => "error"
-    case (Codes.UnresolvedCallTarget, _)                                => "unresolved"
-    case (Codes.UnresolvedCallEffects, Reasons.CalleeBodyNotInArtifact) => "info"
-    case (Codes.UnresolvedCallEffects, _)                               => "unresolved"
-    case (Codes.B2xUnmodelledElement, _)                                => "unresolved"
-    case (unknownCode, _)                                               =>
+    case (Codes.UnknownConstruct | Codes.SyntaxError, _)                                  => "error"
+    case (Codes.UnresolvedCallTarget, _)                                                  => "unresolved"
+    case (Codes.UnresolvedCallEffects, Reasons.CalleeBodyNotInArtifact)                   => "info"
+    case (Codes.UnresolvedCallEffects, _)                                                 => "unresolved"
+    case (Codes.B2xUnmodelledElement, _)                                                  => "unresolved"
+    case (Codes.BomMember, _)                                                             => "info"
+    case (Codes.BomFilesNotLoaded, _)                                                     => "info"
+    case (Codes.BomTypeUnresolved | Codes.BomDuplicateClass | Codes.BomIncludeMissing, _) =>
+      "unresolved"
+    case (unknownCode, _) =>
       throw new IllegalArgumentException(s"Unknown ARL finding code '$unknownCode'")
   }
 

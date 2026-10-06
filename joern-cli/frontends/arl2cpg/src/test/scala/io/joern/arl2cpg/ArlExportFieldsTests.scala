@@ -258,8 +258,8 @@ ruleset R (S) {
           }
           val valuesByKey = withCallStableId.groupMap(_._1)(_._2)
           val findingCode = valuesByKey.get(Keys.Code).flatMap(_.headOption).getOrElse("")
-          val requiredListKeys =
-            if (findingCode == Codes.UnresolvedCallTarget) ArlFindings.ListValuedKeys else Set.empty[String]
+        val requiredListKeys =
+          if (findingCode == Codes.UnresolvedCallTarget) Set(Keys.Candidates) else Set.empty[String]
           (valuesByKey.keySet ++ requiredListKeys).toList.sorted.map { key =>
             val values = valuesByKey.getOrElse(key, Nil)
             val value =
