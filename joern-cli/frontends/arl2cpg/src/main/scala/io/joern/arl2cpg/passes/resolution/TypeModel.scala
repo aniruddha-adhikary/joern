@@ -1,5 +1,16 @@
 package io.joern.arl2cpg.passes.resolution
 
+import io.joern.arl2cpg.ArlFindings.Codes
+import io.joern.arl2cpg.bom.{
+  BomDiagnostic,
+  BomMember,
+  BomMemberKind,
+  BomModel,
+  BomProperty,
+  BomTypeDecl,
+  BomTypeRef,
+  BomTypeSource
+}
 import io.shiftleft.codepropertygraph.generated.nodes.TypeDecl
 import io.shiftleft.semanticcpg.language.*
 import org.objectweb.asm.{ClassReader, ClassVisitor, FieldVisitor, MethodVisitor, Opcodes, Type}
@@ -12,6 +23,8 @@ import scala.collection.mutable
 import scala.jdk.CollectionConverters.*
 import scala.util.control.NonFatal
 
+final case class BomOrigin(file: String, translation: Option[String])
+
 final case class JavaMethodInfo(
   owner: String,
   name: String,
@@ -21,7 +34,8 @@ final case class JavaMethodInfo(
   isVarargs: Boolean,
   fullName: String,
   signature: String,
-  isPublic: Boolean
+  isPublic: Boolean,
+  bom: Option[BomOrigin] = None
 )
 
 final case class JavaTypeInfo(
@@ -34,7 +48,7 @@ final case class JavaTypeInfo(
 )
 
 /** Java type information from the XOM CPG, ARL signature members, ordered classpath entries, and the running JDK. */
-final class TypeModel(sourceDecls: Seq[TypeDecl], classpath: Seq[String]) {
+final class TypeModel(sourceDecls: Seq[TypeDecl], classpath: Seq[String], bom: BomModel = BomModel.empty) {
 
   private val logger = LoggerFactory.getLogger(getClass)
 
@@ -60,6 +74,16 @@ final class TypeModel(sourceDecls: Seq[TypeDecl], classpath: Seq[String]) {
   private val classpathIndex: Map[String, ClassLocation] = indexClasspath()
   private val parsedClasspathTypes                       = mutable.Map.empty[String, Option[JavaTypeInfo]]
   private val parsedJdkTypes                             = mutable.Map.empty[String, Option[JavaTypeInfo]]
+  private val bomTypeNames                               = bom.types.map(_.declaration.fullName).toSet
+  private val bomTypeDiagnostics                         = mutable.ListBuffer.empty[BomDiagnostic]
+  private lazy val bomTypes: Map[String, JavaTypeInfo]   = {
+    bom.types
+      .sortBy(source => (source.declaration.fullName, source.file))
+      .map(source => source.declaration.fullName -> bomTypeInfo(source))
+      .toMap
+  }
+
+  def bomDiagnostics: List[BomDiagnostic] = bomTypeDiagnostics.toList
 
   private lazy val jrtFileSystem =
     try Some(FileSystems.getFileSystem(URI.create("jrt:/")))
@@ -81,8 +105,8 @@ final class TypeModel(sourceDecls: Seq[TypeDecl], classpath: Seq[String]) {
       }
       .orElse(arrayType(fullName))
 
-  private def getExact(fullName: String): Option[JavaTypeInfo] =
-    sourceTypes
+  private def getExact(fullName: String): Option[JavaTypeInfo] = {
+    val javaType = sourceTypes
       .get(fullName)
       .orElse {
         parsedClasspathTypes.getOrElseUpdate(fullName, classpathIndex.get(fullName).flatMap(readClass))
@@ -90,6 +114,13 @@ final class TypeModel(sourceDecls: Seq[TypeDecl], classpath: Seq[String]) {
       .orElse {
         parsedJdkTypes.getOrElseUpdate(fullName, readJdkClass(fullName))
       }
+    (javaType, bomTypes.get(fullName)) match {
+      case (Some(java), Some(bomType)) => Some(mergeBomType(java, bomType))
+      case (Some(java), None)          => Some(java)
+      case (None, Some(bomType))       => Some(bomType)
+      case (None, None)                => None
+    }
+  }
 
   private def nestedBinaryNameVariants(fullName: String): Iterator[String] = {
     val dots = fullName.indices.filter(index => fullName(index) == '.')
@@ -216,6 +247,130 @@ final class TypeModel(sourceDecls: Seq[TypeDecl], classpath: Seq[String]) {
     }
     val fields = typeDecl.member.l.sortBy(_.name).map(member => member.name -> member.typeFullName).toMap
     JavaTypeInfo(typeDecl.fullName, superClass, interfaces.sorted, isInterface, methods, fields)
+  }
+
+  private def bomTypeInfo(source: BomTypeSource): JavaTypeInfo = {
+    val declaration    = source.declaration
+    val typeParameters = declaration.typeParameters.map(parameter => parameter.name -> parameter).toMap
+
+    def resolve(reference: BomTypeRef, context: String, resolving: Set[String] = Set.empty): Option[String] = {
+      val rawName                  = reference.name
+      val baseName: Option[String] = rawName match {
+        case "object"                                                => Some("java.lang.Object")
+        case "string"                                                => Some("java.lang.String")
+        case name if name == "void" || PrimitiveTypes.contains(name) => Some(name)
+        case name if typeParameters.contains(name)                   =>
+          if (resolving.contains(name)) None
+          else
+            typeParameters(name).bounds.headOption
+              .flatMap(bound => resolve(bound, context, resolving + name))
+              .orElse(Some("java.lang.Object"))
+        case name if !name.contains(".") =>
+          Some(if (declaration.packageName.nonEmpty) s"${declaration.packageName}.$name" else name)
+        case name => Some(name)
+      }
+      val resolvedBase = baseName.flatMap { candidate =>
+        if (candidate == "void" || PrimitiveTypes.contains(candidate)) Some(candidate)
+        else if (rawName == "object" || rawName == "string") Some(candidate)
+        else if (typeParameters.contains(rawName) && !resolving.contains(rawName)) Some(candidate)
+        else if (!rawName.contains(".") && !typeParameters.contains(rawName)) {
+          Option.when(bomTypeNames.contains(candidate))(candidate)
+        } else knownTypeName(candidate)
+      }
+      resolvedBase.map(_ + ("[]" * reference.dimensions))
+    }
+
+    def required(reference: BomTypeRef, context: String): Option[String] =
+      resolve(reference, context).orElse {
+        bomTypeDiagnostics += BomDiagnostic(
+          Codes.BomTypeUnresolved,
+          source.file,
+          s"unresolved BOM type '${reference.erasedName}' in $context"
+        )
+        None
+      }
+
+    val superClass =
+      declaration.superClass.flatMap(reference => required(reference, s"${declaration.fullName} superclass"))
+    val interfaces =
+      declaration.interfaces.flatMap(reference => required(reference, s"${declaration.fullName} interface"))
+    val methods = declaration.members
+      .flatMap { member =>
+        member.kind match {
+          case BomMemberKind.Attribute => None
+          case _                       =>
+            val returnType =
+              if (member.kind == BomMemberKind.Constructor) Some("void")
+              else
+                member.memberType
+                  .flatMap(reference => required(reference, s"${declaration.fullName}.${member.name} return type"))
+            val parameterTypes = member.parameters.map { parameter =>
+              required(parameter.tpe, s"${declaration.fullName}.${member.name} parameter")
+            }
+            val throwsTypes =
+              member.throwsTypes.map(reference => required(reference, s"${declaration.fullName}.${member.name} throws"))
+            if (returnType.isEmpty || parameterTypes.exists(_.isEmpty) || throwsTypes.exists(_.isEmpty)) None
+            else {
+              val params     = parameterTypes.flatten
+              val signature  = s"${returnType.get}(${params.mkString(",")})"
+              val methodName = if (member.kind == BomMemberKind.Constructor) "<init>" else member.name
+              Some(
+                JavaMethodInfo(
+                  declaration.fullName,
+                  methodName,
+                  params,
+                  returnType.get,
+                  member.modifiers.contains("static"),
+                  member.parameters.lastOption.exists(_.isVarargs),
+                  s"${declaration.fullName}.$methodName:$signature",
+                  signature,
+                  !member.modifiers.contains("private") && !member.modifiers.contains("protected"),
+                  Some(BomOrigin(source.file, member.properties.find(_.key == "translation.irl").flatMap(_.value)))
+                )
+              )
+            }
+        }
+      }
+      .sortBy(_.fullName)
+    val fields = declaration.members.flatMap { member =>
+      Option
+        .when(member.kind == BomMemberKind.Attribute) {
+          member.memberType
+            .flatMap(reference => required(reference, s"${declaration.fullName}.${member.name} field"))
+            .map(member.name -> _)
+        }
+        .flatten
+    }.toMap
+    val effectiveSuperClass =
+      if (declaration.kind == io.joern.arl2cpg.bom.BomTypeKind.Interface) None
+      else superClass.orElse(Option.when(declaration.fullName != "java.lang.Object")("java.lang.Object"))
+    JavaTypeInfo(
+      declaration.fullName,
+      effectiveSuperClass,
+      interfaces,
+      declaration.kind == io.joern.arl2cpg.bom.BomTypeKind.Interface,
+      methods,
+      fields
+    )
+  }
+
+  private def knownTypeName(candidate: String): Option[String] = {
+    val candidates = Iterator(candidate) ++ nestedBinaryNameVariants(candidate)
+    candidates.find { name =>
+      bomTypeNames.contains(name) ||
+      sourceTypes.contains(name) ||
+      classpathIndex.contains(name) ||
+      readJdkClass(name).nonEmpty
+    }
+  }
+
+  private def mergeBomType(javaType: JavaTypeInfo, bomType: JavaTypeInfo): JavaTypeInfo = {
+    val javaMethods = javaType.methods.map(method => method.name -> method.paramTypes).toSet
+    val methods     =
+      (javaType.methods ++ bomType.methods.filterNot(method => javaMethods.contains(method.name -> method.paramTypes)))
+        .sortBy(_.fullName)
+    val fields = javaType.fields ++ bomType.fields.filterNot { case (name, _) => javaType.fields.contains(name) }
+    javaType.copy(methods = methods, fields = fields)
   }
 
   private def indexClasspath(): Map[String, ClassLocation] = {

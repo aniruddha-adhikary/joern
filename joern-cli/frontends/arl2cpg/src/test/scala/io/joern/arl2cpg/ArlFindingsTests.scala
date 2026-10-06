@@ -18,7 +18,12 @@ class ArlFindingsTests extends AnyWordSpec with Matchers {
         (Codes.UnresolvedCallEffects, Reasons.CalleeBodyNotInArtifact, "info"),
         (Codes.UnresolvedCallEffects, Reasons.ReceiverTypeUnknown, "unresolved"),
         (Codes.UnresolvedCallEffects, "another-reason", "unresolved"),
-        (Codes.B2xUnmodelledElement, "unmodelled-element", "unresolved")
+        (Codes.B2xUnmodelledElement, "unmodelled-element", "unresolved"),
+        (Codes.BomMember, Codes.BomMember, "info"),
+        (Codes.BomTypeUnresolved, Codes.BomTypeUnresolved, "unresolved"),
+        (Codes.BomDuplicateClass, Codes.BomDuplicateClass, "unresolved"),
+        (Codes.BomIncludeMissing, Codes.BomIncludeMissing, "unresolved"),
+        (Codes.BomFilesNotLoaded, Codes.BomFilesNotLoaded, "info")
       )
 
       cases.foreach { case (code, reason, expectedSeverity) =>
@@ -33,7 +38,7 @@ class ArlFindingsTests extends AnyWordSpec with Matchers {
         )
         finding.keyValuePairs.find(_.key == Keys.Severity).map(_.value) shouldBe Some(expectedSeverity)
       }
-      ArlFindings.ListValuedKeys shouldBe Set(Keys.Candidates)
+      ArlFindings.ListValuedKeys shouldBe Set(Keys.Candidates, Keys.BomFiles)
     }
 
     "reject unknown finding codes" in {

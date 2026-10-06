@@ -1,6 +1,7 @@
 package io.joern.arl2cpg
 
 import io.joern.arl2cpg.b2x.B2xModel
+import io.joern.arl2cpg.bom.BomModel
 import io.joern.arl2cpg.passes.{
   AstCreationPass,
   B2xEffectsPass,
@@ -34,11 +35,13 @@ class Arl2Cpg extends X2CpgFrontend {
     */
   def createCpg(config: Config): Try[Cpg] = {
     Try(config.b2xPath.map(loadB2x)).flatMap { b2x =>
-      buildCpg(config, b2x)
+      Try(BomModel.load(config.xomClasspath, config.bomPaths, config.bomRoots)).flatMap { bom =>
+        buildCpg(config, b2x, bom)
+      }
     }
   }
 
-  private def buildCpg(config: Config, b2x: Option[B2xModel]): Try[Cpg] = {
+  private def buildCpg(config: Config, b2x: Option[B2xModel], bom: BomModel): Try[Cpg] = {
     withNewEmptyCpg(config.outputPath, config) { (cpg, config) =>
       val diagnostics = new ParseDiagnostics
       MetaDataPass(cpg, Language, config.inputPath).createAndApply()
@@ -48,8 +51,10 @@ class Arl2Cpg extends X2CpgFrontend {
         new XomMethodKindPass(cpg).createAndApply()
       }
       TypeNodePass.withTypesFromCpg(cpg).createAndApply()
-      if (config.xomSrcPaths.nonEmpty || config.xomClasspath.nonEmpty) {
-        new XomLinkerPass(cpg, config.xomClasspath, b2x).createAndApply()
+      if (
+        config.xomSrcPaths.nonEmpty || config.xomClasspath.nonEmpty || config.bomPaths.nonEmpty || config.bomRoots.nonEmpty
+      ) {
+        new XomLinkerPass(cpg, config.xomClasspath, b2x, bom).createAndApply()
       }
       new B2xEffectsPass(cpg, b2x).createAndApply()
       new FindingsPass(cpg, diagnostics, config.allowUnknown).createAndApply()
