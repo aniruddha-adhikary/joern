@@ -118,6 +118,7 @@ ruleset R (S) {
           |  public static int stringCount(String... values) { return values.length; }
           |  public static ilog.rules.brl.Date echoDate(ilog.rules.brl.Date value) { return value; }
           |  public static String echoString(String value) { return value; }
+          |  static int packagePrivate(int value) { return value; }
           |}
           |""".stripMargin,
       "ilog/rules/brl/Date.java" ->
@@ -125,6 +126,14 @@ ruleset R (S) {
           |public class Date {
           |  public String name;
           |  public String getCode() { return name; }
+          |}
+          |""".stripMargin,
+      "pkg/Outer.java" ->
+        """package pkg;
+          |public class Outer {
+          |  public static class Inner {
+          |    public static int nested(int value) { return value; }
+          |  }
           |}
           |""".stripMargin
     )
@@ -332,7 +341,7 @@ ruleset R (S) {
             |""".stripMargin,
         "loan/Checkable.java" ->
           """package loan;
-            |public interface Checkable { public int onlyInterface(); }
+            |public interface Checkable { int onlyInterface(); }
             |""".stripMargin,
         "loan/Child.java" ->
           """package loan;
@@ -417,6 +426,81 @@ ruleset R (S) {
       constructor.methodFullName shouldBe "loan.Borrower.<init>:void()"
       constructor.typeFullName shouldBe "loan.Borrower"
       constructor.dispatchType shouldBe DispatchTypes.DYNAMIC_DISPATCH
+    }
+
+    "not inherit constructors from a superclass" in withCpg(
+      """new Sub("x");""",
+      imports = Seq("import loan.Sub;"),
+      javaSources = Map(
+        "loan/Base.java" ->
+          """package loan;
+            |public class Base {
+            |  public Base(String value) {}
+            |}
+            |""".stripMargin,
+        "loan/Sub.java" ->
+          """package loan;
+            |public class Sub extends Base {
+            |  public Sub(int value) { super("x"); }
+            |}
+            |""".stripMargin
+      )
+    ) { cpg =>
+      val constructor = cpg.call.name("<init>").filter(_.file.name.exists(_.endsWith(".arl"))).head
+      constructor.methodFullName should include("<unresolvedSignature>")
+      val finding = findingFor(cpg, constructor.id()).get
+      ArlFindings.reason(finding) shouldBe "no-candidate"
+      ArlFindings.value(finding, Keys.Candidates) shouldBe "loan.Sub.<init>:void(int)"
+    }
+
+    "consider only public source methods" in withCpg(
+      """Util.m(1);
+        |PackageUtil.only(1);
+        |""".stripMargin,
+      imports = Seq("import loan.Util;", "import loan.PackageUtil;"),
+      javaSources = Map(
+        "loan/Util.java" ->
+          """package loan;
+            |public class Util {
+            |  private static int m(int value) { return value; }
+            |  public static long m(long value) { return value; }
+            |}
+            |""".stripMargin,
+        "loan/PackageUtil.java" ->
+          """package loan;
+            |public class PackageUtil {
+            |  static int only(int value) { return value; }
+            |}
+            |""".stripMargin
+      )
+    ) { cpg =>
+      expectCall(cpg, "m", "Util.m(1)", "loan.Util.m:long(long)", "long")
+      val inaccessible = findCall(cpg, "only", "PackageUtil.only(1)").get
+      ArlFindings.reason(findingFor(cpg, inaccessible.id()).get) shouldBe "no-candidate"
+    }
+
+    "not infer a member type from a private getter" in withCpg(
+      "GetterUtil.choose(hidden.code);",
+      imports = Seq("import loan.HiddenGetter;", "import loan.GetterUtil;"),
+      signatureFields = "public in HiddenGetter hidden = null;",
+      javaSources = Map(
+        "loan/HiddenGetter.java" ->
+          """package loan;
+            |public class HiddenGetter {
+            |  private String getCode() { return ""; }
+            |}
+            |""".stripMargin,
+        "loan/GetterUtil.java" ->
+          """package loan;
+            |public class GetterUtil {
+            |  public static int choose(String value) { return 1; }
+            |  public static int choose(Object value) { return 2; }
+            |}
+            |""".stripMargin
+      )
+    ) { cpg =>
+      val call = findCall(cpg, "choose", "GetterUtil.choose(hidden.code)").get
+      ArlFindings.reason(findingFor(cpg, call.id()).get) shouldBe "ambiguous"
     }
 
     "leave incomparable overloads unresolved with sorted ambiguity evidence" in withCpg(
@@ -539,6 +623,7 @@ ruleset R (S) {
         val body              =
           """CpUtil.objectCount(new Object[]{"a"});
             |CpUtil.stringCount("a", "b");
+            |CpUtil.packagePrivate(1);
             |CpUtil.echoDate(date);
             |CpUtil.echoString(date.name);
             |CpUtil.echoString(date.code);
@@ -568,6 +653,8 @@ ruleset R (S) {
               "loan.CpUtil.stringCount:int(java.lang.String[])",
               "int"
             )
+            val packagePrivate = findCall(cpg, "packagePrivate", "CpUtil.packagePrivate(1)").get
+            ArlFindings.reason(findingFor(cpg, packagePrivate.id()).get) shouldBe "no-candidate"
             expectCall(
               cpg,
               "echoDate",
@@ -607,6 +694,108 @@ ruleset R (S) {
       }
       val parsed = Main.parseConfig(Array("--xom-classpath", "first.jar", "--xom-classpath", "classes"))
       parsed.map(_.xomClasspath) shouldBe Some(Seq("first.jar", "classes"))
+    }
+
+    "resolve dotted nested classpath and JDK types" in {
+      FileUtil.usingTemporaryDirectory("arl2cpg-overload-nested-types") { dir =>
+        val (jar, _) = compileStubSources(dir)
+        withCpgAt(
+          dir,
+          """Inner.nested(1);
+            |Entry.comparingByKey();
+            |""".stripMargin,
+          Seq("import pkg.Outer.Inner;", "import java.util.Map.Entry;"),
+          "",
+          Map.empty,
+          Seq(jar.toString),
+          allowUnknown = true
+        ) { cpg =>
+          expectCall(cpg, "nested", "Inner.nested(1)", "pkg.Outer$Inner.nested:int(int)", "int")
+          expectCall(
+            cpg,
+            "comparingByKey",
+            "Entry.comparingByKey()",
+            "java.util.Map$Entry.comparingByKey:java.util.Comparator()",
+            "java.util.Comparator"
+          )
+        }
+      }
+    }
+
+    "infer conditional expression types without computing unrelated reference lubs" in withCpg(
+      """Util.numeric(flag ? 1 : 2L);
+        |Util.reference(flag ? null : "s");
+        |Util.boxed(flag ? integer : 1);
+        |Util.boxed(flag ? null : 1);
+        |Util.small(flag ? smallByte : smallShort);
+        |Util.bool(flag ? boxedFlag : flag);
+        |Util.supertype(flag ? child : base);
+        |Util.unrelated(flag ? left : right);
+        |""".stripMargin,
+      imports = Seq(
+        "import loan.Util;",
+        "import loan.Base;",
+        "import loan.Child;",
+        "import loan.Left;",
+        "import loan.Right;",
+        "import java.lang.Integer;"
+      ),
+      signatureFields =
+        "public in boolean flag = false; public in Boolean boxedFlag = null; public in Integer integer = null; public in byte smallByte = 0; public in short smallShort = 0; public in Base base = null; public in Child child = null; public in Left left = null; public in Right right = null;",
+      javaSources = Map(
+        "loan/Base.java" ->
+          """package loan;
+            |public class Base {}
+            |""".stripMargin,
+        "loan/Child.java" ->
+          """package loan;
+            |public class Child extends Base {}
+            |""".stripMargin,
+        "loan/Left.java" ->
+          """package loan;
+            |public class Left {}
+            |""".stripMargin,
+        "loan/Right.java" ->
+          """package loan;
+            |public class Right {}
+            |""".stripMargin,
+        "loan/Util.java" ->
+          """package loan;
+            |public class Util {
+            |  public static int numeric(int value) { return value; }
+            |  public static long numeric(long value) { return value; }
+            |  public static int reference(String value) { return 1; }
+            |  public static int reference(Object value) { return 2; }
+            |  public static int boxed(int value) { return value; }
+            |  public static int boxed(Integer value) { return value; }
+            |  public static int small(int value) { return value; }
+            |  public static int small(short value) { return value; }
+            |  public static int bool(boolean value) { return value ? 1 : 0; }
+            |  public static int bool(Boolean value) { return value ? 1 : 0; }
+            |  public static int supertype(Base value) { return 1; }
+            |  public static int supertype(Child value) { return 2; }
+            |  public static int unrelated(Left value) { return 1; }
+            |  public static int unrelated(Right value) { return 2; }
+            |}
+            |""".stripMargin
+      )
+    ) { cpg =>
+      expectCall(cpg, "numeric", "Util.numeric(flag ? 1 : 2L)", "loan.Util.numeric:long(long)", "long")
+      expectCall(
+        cpg,
+        "reference",
+        """Util.reference(flag ? null : "s")""",
+        "loan.Util.reference:int(java.lang.String)",
+        "int"
+      )
+      expectCall(cpg, "boxed", "Util.boxed(flag ? integer : 1)", "loan.Util.boxed:int(int)", "int")
+      expectCall(cpg, "boxed", "Util.boxed(flag ? null : 1)", "loan.Util.boxed:int(java.lang.Integer)", "int")
+      expectCall(cpg, "small", "Util.small(flag ? smallByte : smallShort)", "loan.Util.small:int(short)", "int")
+      expectCall(cpg, "bool", "Util.bool(flag ? boxedFlag : flag)", "loan.Util.bool:int(boolean)", "int")
+      expectCall(cpg, "supertype", "Util.supertype(flag ? child : base)", "loan.Util.supertype:int(loan.Base)", "int")
+
+      val unrelated = findCall(cpg, "unrelated", "Util.unrelated(flag ? left : right)").get
+      ArlFindings.reason(findingFor(cpg, unrelated.id()).get) shouldBe "ambiguous"
     }
 
     "keep import-resolved cast types exact and reject an unrelated Date overload" in withCpg(

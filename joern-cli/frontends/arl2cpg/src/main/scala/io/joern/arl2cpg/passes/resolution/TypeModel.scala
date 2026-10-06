@@ -70,6 +70,13 @@ final class TypeModel(sourceDecls: Seq[TypeDecl], classpath: Seq[String]) {
     sourceNamesBySimpleName.get(name).filter(_.size == 1).flatMap(_.headOption)
 
   def get(fullName: String): Option[JavaTypeInfo] =
+    getExact(fullName)
+      .orElse {
+        nestedBinaryNameVariants(fullName).flatMap(getExact).take(1).toList.headOption
+      }
+      .orElse(arrayType(fullName))
+
+  private def getExact(fullName: String): Option[JavaTypeInfo] =
     sourceTypes
       .get(fullName)
       .orElse {
@@ -78,7 +85,13 @@ final class TypeModel(sourceDecls: Seq[TypeDecl], classpath: Seq[String]) {
       .orElse {
         parsedJdkTypes.getOrElseUpdate(fullName, readJdkClass(fullName))
       }
-      .orElse(arrayType(fullName))
+
+  private def nestedBinaryNameVariants(fullName: String): Iterator[String] = {
+    val dots = fullName.indices.filter(index => fullName(index) == '.')
+    dots.indices.iterator.map { index =>
+      dots.takeRight(index + 1).foldLeft(fullName)((name, dot) => name.updated(dot, '$'))
+    }
+  }
 
   def isPrimitive(typeName: String): Boolean = PrimitiveTypes.contains(typeName)
 
@@ -107,9 +120,12 @@ final class TypeModel(sourceDecls: Seq[TypeDecl], classpath: Seq[String]) {
   }
 
   def methodsFor(typeName: String, name: String): List[JavaMethodInfo] = {
-    val declared          = hierarchy(typeName).flatMap(_.methods.filter(_.name == name))
+    val declared =
+      if (name == "<init>")
+        get(typeName).toList.flatMap(_.methods.filter(method => method.name == name && method.isPublic))
+      else hierarchy(typeName).flatMap(_.methods.filter(method => method.name == name && method.isPublic))
     val withObjectMethods =
-      if (get(typeName).exists(_.isInterface))
+      if (name != "<init>" && get(typeName).exists(_.isInterface))
         get("java.lang.Object").toList.flatMap(_.methods.filter(method => method.name == name && method.isPublic))
       else Nil
     val seen = mutable.Set.empty[(String, List[String])]
@@ -125,13 +141,13 @@ final class TypeModel(sourceDecls: Seq[TypeDecl], classpath: Seq[String]) {
         info.fields.get(memberName).filter(isUsableMemberType).iterator ++
           info.methods.iterator
             .filter(method =>
-              method.paramTypes.isEmpty && method.name == s"get${capitalize(memberName)}" &&
+              method.isPublic && method.paramTypes.isEmpty && method.name == s"get${capitalize(memberName)}" &&
                 isUsableMemberType(method.returnType)
             )
             .map(_.returnType) ++
           info.methods.iterator
             .filter(method =>
-              method.paramTypes.isEmpty && method.name == s"is${capitalize(memberName)}" &&
+              method.isPublic && method.paramTypes.isEmpty && method.name == s"is${capitalize(memberName)}" &&
                 isUsableMemberType(method.returnType)
             )
             .map(_.returnType)
@@ -175,6 +191,7 @@ final class TypeModel(sourceDecls: Seq[TypeDecl], classpath: Seq[String]) {
       val parameters = method.parameter.l.sortBy(_.index).filterNot(parameter => parameter.name == "this")
       val paramTypes = parameters.map(_.typeFullName)
       val signature  = method.signature
+      val modifiers  = method.modifier.map(_.modifierType).toSet
       JavaMethodInfo(
         typeDecl.fullName,
         method.name,
@@ -184,7 +201,7 @@ final class TypeModel(sourceDecls: Seq[TypeDecl], classpath: Seq[String]) {
         parameters.lastOption.exists(_.isVariadic),
         method.fullName,
         signature,
-        method.modifier.exists(_.modifierType == "PUBLIC")
+        modifiers.contains("PUBLIC") || (isInterface && !modifiers.contains("PRIVATE"))
       )
     }
     val fields = typeDecl.member.l.sortBy(_.name).map(member => member.name -> member.typeFullName).toMap
