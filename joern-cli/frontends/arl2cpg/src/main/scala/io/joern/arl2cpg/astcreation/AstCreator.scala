@@ -1,12 +1,18 @@
 package io.joern.arl2cpg.astcreation
 
-import io.joern.arl2cpg.Config
+import io.joern.arl2cpg.{ArlTags, Config}
 import io.joern.arl2cpg.identity.TaskIdentityFile
 import io.joern.arl2cpg.parser.{ARLParser, ArlParseResult}
 import io.joern.arl2cpg.rfl.RuleflowMeta
 import io.joern.x2cpg.{Ast, AstCreatorBase, Defines, ValidationMode}
 import io.shiftleft.codepropertygraph.generated.nodes.*
-import io.shiftleft.codepropertygraph.generated.{DiffGraphBuilder, DispatchTypes, EvaluationStrategies, NodeTypes}
+import io.shiftleft.codepropertygraph.generated.{
+  DiffGraphBuilder,
+  DispatchTypes,
+  EdgeTypes,
+  EvaluationStrategies,
+  NodeTypes
+}
 import io.shiftleft.semanticcpg.language.types.structure.NamespaceTraversal
 import org.antlr.v4.runtime.ParserRuleContext
 import org.antlr.v4.runtime.tree.{ParseTree, TerminalNode}
@@ -69,6 +75,10 @@ class AstCreator(
   /** Counter for synthetic `$T_<n>` bindings, reset per rule. */
   protected var syntheticBindingCount: Int = 0
 
+  private case class PendingIntervalTag(sourceOffset: Int, order: Int, call: NewCall, name: String, value: String)
+
+  private val pendingIntervalTags: mutable.ArrayBuffer[PendingIntervalTag] = mutable.ArrayBuffer.empty
+
   /** fullName of the containing TYPE_DECL (`R`). */
   protected var containerFullName: String = ""
 
@@ -84,7 +94,22 @@ class AstCreator(
       .map(astForCompilationUnit)
       .getOrElse(Ast(NewFile().name(parseResult.filename).order(1)))
     Ast.storeInDiffGraph(ast, diffGraph)
+    pendingIntervalTags.sortBy(tag => (tag.sourceOffset, tag.order)).foreach { pending =>
+      val tag = NewTag().name(pending.name).value(pending.value)
+      diffGraph.addNode(tag)
+      diffGraph.addEdge(pending.call, tag, EdgeTypes.TAGGED_BY)
+    }
     diffGraph
+  }
+
+  protected def queueIntervalTags(
+    call: NewCall,
+    sourceOffset: Int,
+    lowerClosed: Boolean,
+    upperClosed: Boolean
+  ): Unit = {
+    pendingIntervalTags += PendingIntervalTag(sourceOffset, 0, call, ArlTags.IntervalLowerClosed, lowerClosed.toString)
+    pendingIntervalTags += PendingIntervalTag(sourceOffset, 1, call, ArlTags.IntervalUpperClosed, upperClosed.toString)
   }
 
   // ------------------------------------------------------------------
