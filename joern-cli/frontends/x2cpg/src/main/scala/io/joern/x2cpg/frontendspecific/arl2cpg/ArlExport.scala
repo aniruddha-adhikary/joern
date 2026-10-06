@@ -166,7 +166,7 @@ object ArlExport {
         fields += (("typeFullName", ujson.Str(parameter.typeFullName)))
         fields += (("index", number(parameter.index.toLong)))
       case literal: Literal =>
-        fields += (("typeFullName", ujson.Str(literalTypeFullName(literal))))
+        fields += (("typeFullName", ujson.Str(literal.typeFullName)))
       case fieldIdentifier: FieldIdentifier =>
         fields += (("canonicalName", ujson.Str(fieldIdentifier.canonicalName)))
       case call: Call =>
@@ -224,9 +224,6 @@ object ArlExport {
 
     ujson.Obj.from(fields)
   }
-
-  private def literalTypeFullName(literal: Literal): String =
-    if (literal.code.trim == "null") "ANY" else literal.typeFullName
 
   private def tagBoolean(call: Call, tagName: String): Option[ujson.Value] = {
     val values = call.tag.l.filter(_.name == tagName).map(_.value).distinct.sorted
