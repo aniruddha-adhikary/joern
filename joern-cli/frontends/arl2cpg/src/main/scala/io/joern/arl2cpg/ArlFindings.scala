@@ -15,12 +15,14 @@ object ArlFindings {
 
   /** Finding key/value keys. */
   object Keys {
-    val Code     = "code"
-    val Reason   = "reason"
-    val Message  = "message"
-    val Filename = "filename"
-    val Line     = "line"
-    val Author   = "author"
+    val Code       = "code"
+    val Reason     = "reason"
+    val Message    = "message"
+    val Filename   = "filename"
+    val Line       = "line"
+    val Author     = "author"
+    val CallId     = "callId"
+    val Candidates = "candidates"
   }
 
   val Author = "arl2cpg"
@@ -39,6 +41,9 @@ object ArlFindings {
 
     /** A B2X element the reader does not model — an effect possibly missing from the graph. */
     val B2xUnmodelledElement = "b2x-unmodelled-element"
+
+    /** A Java call whose target could not be chosen from the receiver and static argument types. */
+    val UnresolvedCallTarget = "unresolved-call-target"
   }
 
   /** Reasons a call's effects stay unresolved (ported from arlgraph `Lowering.b2xEffects`). */
@@ -61,7 +66,8 @@ object ArlFindings {
     reason: String,
     message: String,
     filename: String,
-    line: Option[Int]
+    line: Option[Int],
+    additionalKeyValues: List[(String, String)] = Nil
   ): NewFinding = {
     val pairs = List(
       NewKeyValuePair().key(Keys.Author).value(Author),
@@ -70,7 +76,7 @@ object ArlFindings {
       NewKeyValuePair().key(Keys.Message).value(message),
       NewKeyValuePair().key(Keys.Filename).value(filename),
       NewKeyValuePair().key(Keys.Line).value(line.map(_.toString).getOrElse(""))
-    )
+    ) ++ additionalKeyValues.map { case (key, value) => NewKeyValuePair().key(key).value(value) }
     val node = NewFinding().keyValuePairs(pairs).evidence(evidence.toList)
     builder.addNode(node)
     node

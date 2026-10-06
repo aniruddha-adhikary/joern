@@ -22,10 +22,12 @@ object ResolutionCoverageRunner {
     val arlDir    = Paths.get(args(0)).toAbsolutePath.normalize()
     val xomSrcDir = Paths.get(args(1)).toString
     var output    = Option.empty[Path]
+    var classpath = Vector.empty[String]
     var index     = 2
     while (index < args.length) {
       args(index) match {
         case "--xom-classpath" if index + 1 < args.length =>
+          classpath :+= args(index + 1)
           index += 2
         case "--resolved-out" if index + 1 < args.length =>
           output = Some(Paths.get(args(index + 1)))
@@ -38,6 +40,7 @@ object ResolutionCoverageRunner {
     val config = Config()
       .withInputPath(arlDir.toString)
       .withXomSrcPaths(Set(xomSrcDir))
+      .withXomClasspath(classpath)
       .withAllowUnknown(true)
     val cpg = new Arl2Cpg().createCpg(config).get
     try {
