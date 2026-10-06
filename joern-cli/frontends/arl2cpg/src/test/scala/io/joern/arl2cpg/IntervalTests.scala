@@ -1,6 +1,8 @@
 package io.joern.arl2cpg
 
 import io.joern.arl2cpg.testfixtures.{Arl2CpgSuite, ArlDefaultTestCpg}
+import io.joern.x2cpg.frontendspecific.arl2cpg.ArlFindings
+import io.joern.x2cpg.frontendspecific.arl2cpg.ArlTags
 import io.shiftleft.codepropertygraph.generated.nodes.Call
 import io.shiftleft.semanticcpg.language.*
 

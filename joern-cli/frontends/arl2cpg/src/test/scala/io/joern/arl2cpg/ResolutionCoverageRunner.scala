@@ -1,5 +1,6 @@
 package io.joern.arl2cpg
 
+import io.joern.x2cpg.frontendspecific.arl2cpg.ArlFindings
 import io.joern.x2cpg.Defines
 import io.shiftleft.codepropertygraph.generated.Cpg
 import io.shiftleft.codepropertygraph.generated.nodes.Call

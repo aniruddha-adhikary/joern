@@ -1,4 +1,4 @@
-package io.joern.arl2cpg
+package io.joern.x2cpg.frontendspecific.arl2cpg
 
 import io.shiftleft.codepropertygraph.generated.nodes.{AbstractNode, Finding, NewFinding, NewKeyValuePair, NewTag}
 import io.shiftleft.codepropertygraph.generated.{Cpg, DiffGraphBuilder, EdgeTypes}

@@ -1,6 +1,8 @@
 package io.joern.arl2cpg
 
-import io.joern.arl2cpg.ArlFindings.{Codes, Reasons}
+import io.joern.x2cpg.frontendspecific.arl2cpg.ArlFindings
+import io.joern.x2cpg.frontendspecific.arl2cpg.ArlFindings.{Codes, Reasons}
+import io.joern.x2cpg.frontendspecific.arl2cpg.ArlTags
 import io.joern.arl2cpg.passes.Gate1Violation
 import io.joern.x2cpg.X2Cpg
 import io.shiftleft.codepropertygraph.generated.Cpg
