@@ -1,8 +1,8 @@
-name                     := "joern"
 ThisBuild / organization := "io.joern"
 ThisBuild / scalaVersion := "3.8.3"
+Global / lintUnusedKeysOnLoad := false
 
-val cpgVersion = "1.7.76"
+val cpgVersion = "1.7.78"
 
 lazy val joerncli          = Projects.joerncli
 lazy val querydb           = Projects.querydb
@@ -28,6 +28,8 @@ lazy val rust2cpg          = Projects.rust2cpg
 lazy val arl2cpg           = Projects.arl2cpg
 lazy val linterRules       = Projects.linterRules
 lazy val linterRulesInput  = Projects.linterRulesInput
+
+lazy val createDistribution = taskKey[File]("Create a complete Joern distribution")
 
 lazy val root = project
   .in(file("."))
@@ -59,6 +61,28 @@ lazy val root = project
     // and must never be released (ciReleaseSonatype publishes root + aggregated projects)
   )
   .dependsOn(linterRules % ScalafixConfig)
+  .settings(
+    name         := "joern",
+    publish / skip := true, // don't publish the root project
+    createDistribution := Def.uncached {
+      val platformSuffix = (buildOperatingSystem.value, buildArchitecture.value) match {
+        case (Environment.OperatingSystemType.Linux, Environment.ArchitectureType.X86)     => "linux-x86_64"
+        case (Environment.OperatingSystemType.Linux, Environment.ArchitectureType.ARMv8)   => "linux-arm64"
+        case (Environment.OperatingSystemType.Mac, Environment.ArchitectureType.X86)       => "macos-x86_64"
+        case (Environment.OperatingSystemType.Mac, Environment.ArchitectureType.ARMv8)     => "macos-arm64"
+        case (Environment.OperatingSystemType.Windows, Environment.ArchitectureType.ARMv8) => "windows-arm64"
+        case (Environment.OperatingSystemType.Windows, _)                                  => "windows-x86_64"
+        case _                                                                              => "unknown"
+      }
+      val distributionFile    = target.value / s"joern-cli-$platformSuffix.zip"
+      val zipRef              = (joerncli / Universal / packageBin).value
+      val zip                 = fileConverter.value.toPath(zipRef).toFile
+      IO.copyFile(zip, distributionFile)
+      val querydbDistribution = (querydb / createDistribution).value
+      println(s"created distribution - resulting files: $distributionFile, $querydbDistribution")
+      distributionFile
+    }
+  )
 
 ThisBuild / libraryDependencies ++= Seq(
   "org.slf4j"                % "slf4j-api"         % Versions.slf4j,
@@ -78,7 +102,7 @@ ThisBuild / compile / javacOptions ++= Seq(
   "-proc:none",
   "--release=17"
 ) ++ {
-  // Require Java 13+ due to FileSystems.newFileSystem(Path) API used in project/FileUtils.scala
+  // this build requires JDK13+
   val javaVersion = sys.props("java.specification.version").toFloat
   assert(javaVersion.toInt >= 13, s"this build requires JDK13+ - you're using $javaVersion")
   Nil
@@ -99,27 +123,7 @@ ThisBuild / scalacOptions ++= Seq(
 ThisBuild / semanticdbEnabled := true
 ThisBuild / semanticdbVersion := scalafixSemanticdb.revision
 
-lazy val createDistribution = taskKey[File]("Create a complete Joern distribution")
-createDistribution := {
-  val platformSuffix = (Environment.operatingSystem, Environment.architecture) match {
-    case (Environment.OperatingSystemType.Linux, Environment.ArchitectureType.X86)   => "linux-x86_64"
-    case (Environment.OperatingSystemType.Linux, Environment.ArchitectureType.ARMv8) => "linux-arm64"
-    case (Environment.OperatingSystemType.Mac, Environment.ArchitectureType.X86)     => "macos-x86_64"
-    case (Environment.OperatingSystemType.Mac, Environment.ArchitectureType.ARMv8)   => "macos-arm64"
-    case (Environment.OperatingSystemType.Windows, Environment.ArchitectureType.ARMv8) => "windows-arm64"
-    case (Environment.OperatingSystemType.Windows, _)                                 => "windows-x86_64"
-    case _                                                                            => "unknown"
-  }
-  val distributionFile    = file(s"target/joern-cli-$platformSuffix.zip")
-  val zip                 = (joerncli / Universal / packageBin).value
-  IO.copyFile(zip, distributionFile)
-  val querydbDistribution = (querydb / createDistribution).value
-  println(s"created distribution - resulting files: $distributionFile, $querydbDistribution")
-  distributionFile
-}
-
 ThisBuild / resolvers ++= Seq(
-  Resolver.mavenLocal,
   "Sonatype OSS" at "https://oss.sonatype.org/content/repositories/public",
   "Atlassian" at "https://packages.atlassian.com/mvn/maven-atlassian-external",
   "Gradle Releases" at "https://repo.gradle.org/gradle/libs-releases/",
@@ -129,25 +133,34 @@ ThisBuild / resolvers ++= Seq(
 ThisBuild / Test / fork               := true
 ThisBuild / Test / testForkedParallel := true
 
+// sbt 2.x defaults to exportJars := true, putting internal subprojects on each other's classpaths as
+// (potentially CAS-cached, extension-less) jars. That breaks tests which load resources as files
+// (Paths.get(getResource(...).toURI) -> FileSystemNotFoundException) and in-process script compilation
+// via replpp, whose inherited classpath entries the Scala compiler ignores when they have no .jar
+// extension. Class directories avoid both issues.
+ThisBuild / exportJars := false
+
 trapExit := false
 
 Global / onChangedBuildSource := ReloadOnSourceChanges
 
-// publishing info for sonatype / maven central
-ThisBuild / publishTo              := sonatypePublishToBundle.value
-ThisBuild / sonatypeCredentialHost := xerial.sbt.Sonatype.sonatypeCentralHost
+// publishing info for maven central
+ThisBuild / publishTo := {
+  val centralSnapshots = "https://central.sonatype.com/repository/maven-snapshots/"
+  if (isSnapshot.value) Some("central-snapshots" at centralSnapshots)
+  else localStaging.value
+}
 
-ThisBuild / scmInfo  := Some(ScmInfo(url("https://github.com/joernio/joern"), "scm:git@github.com:joernio/joern.git"))
-ThisBuild / homepage := Some(url("https://joern.io/"))
-ThisBuild / licenses := List("Apache-2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0"))
+ThisBuild / scmInfo  := Some(ScmInfo(uri("https://github.com/joernio/joern"), "scm:git@github.com:joernio/joern.git"))
+ThisBuild / homepage := Some(uri("https://joern.io/"))
+ThisBuild / licenses := List(License("Apache-2.0", uri("http://www.apache.org/licenses/LICENSE-2.0")))
 ThisBuild / developers := List(
   /* sonatype requires this to be non-empty */
-  Developer("fabsx00", "Fabian Yamaguchi", "fabs@shiftleft.io", url("https://github.com/fabsx00"))
+  Developer("fabsx00", "Fabian Yamaguchi", "fabs@shiftleft.io", uri("https://github.com/fabsx00"))
 )
-
-publish / skip := true // don't publish the root project
 
 ThisBuild / Test / packageBin / publishArtifact := true
 
 // trigger an sbt reload when any `application.conf` file changes
-Global / checkBuildSources / fileInputs += (baseDirectory.value.toGlob / ** / "resources" / "application.conf")
+Global / checkBuildSources / fileInputs +=
+  (baseDirectory.value.toGlob / "joern-cli" / "frontends" / * / "src" / "main" / "resources" / "application.conf")

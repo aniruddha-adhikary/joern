@@ -20,7 +20,6 @@ class RubyScope(summary: RubyProgramSummary, projectRoot: Option[String])
     extends Scope[String, DeclarationNew, TypedScopeElement]
     with TypedScope[RubyMethod, RubyField, RubyType](summary) {
 
-  private var tmpVarCounter       = 0
   private var tmpClassCounter     = 0
   private var tmpProcParamCounter = 0
   private var tmpClosureCounter   = 0
@@ -29,8 +28,9 @@ class RubyScope(summary: RubyProgramSummary, projectRoot: Option[String])
     .map(m => RubyMethod(m, List.empty, Defines.Any, Some(GlobalTypes.kernelPrefix)))
     .toList
 
+  // Insertion ordered, as type resolution picks the first match among the types in scope
   override val typesInScope: mutable.Set[RubyType] =
-    mutable.Set(RubyType(GlobalTypes.kernelPrefix, builtinMethods, List.empty))
+    mutable.LinkedHashSet(RubyType(GlobalTypes.kernelPrefix, builtinMethods, List.empty))
 
   // Add some built-in methods that are significant
   typesInScope.addAll(
@@ -62,7 +62,7 @@ class RubyScope(summary: RubyProgramSummary, projectRoot: Option[String])
     )
   )
 
-  override val membersInScope: mutable.Set[MemberLike] = mutable.Set(builtinMethods*)
+  override val membersInScope: mutable.Set[MemberLike] = mutable.LinkedHashSet(builtinMethods*)
 
   /** @return
     *   using the stack, will initialize a new module scope object.
@@ -107,10 +107,10 @@ class RubyScope(summary: RubyProgramSummary, projectRoot: Option[String])
     // Use the summary to determine if there is a constructor present
     val mappedScopeNode = scopeNode match {
       case n: NamespaceLikeScope =>
-        typesInScope.addAll(summary.typesUnderNamespace(n.fullName))
+        typesInScope.addAll(summary.typesUnderNamespaceSorted(n.fullName))
         n
       case n: ProgramScope =>
-        typesInScope.addAll(summary.typesUnderNamespace(n.fullName))
+        typesInScope.addAll(summary.typesUnderNamespaceSorted(n.fullName))
         n
       case TypeScope(name, _, _) =>
         typesInScope.addAll(summary.matchingTypes(name))
@@ -145,14 +145,18 @@ class RubyScope(summary: RubyProgramSummary, projectRoot: Option[String])
     }
   }
 
-  def lookupVariableInOuterScope(identifier: String): List[DeclarationNew] = {
-    stack.drop(1).collect {
+  def lookupCapturedVariable(identifier: String): Option[DeclarationNew] = {
+    val outerStack     = stack.drop(1)
+    val methodBoundary = outerStack.indexWhere {
+      case ScopeElement(m: MethodLikeScope, _) if !m.fullName.contains("<lambda>") => true
+      case _                                                                       => false
+    }
+    val reachableScopes = if (methodBoundary >= 0) outerStack.take(methodBoundary + 1) else outerStack
+    reachableScopes.collectFirst {
       case scopeElement if scopeElement.variables.contains(identifier) =>
         scopeElement.variables(identifier)
     }
   }
-
-  def lookupSelfInOuterScope: Option[DeclarationNew] = lookupVariableInOuterScope(RubyDefines.Self).headOption
 
   def lookupSelfInCurrentScope: Option[DeclarationNew] = {
     stack.headOption.collectFirst {
@@ -188,6 +192,7 @@ class RubyScope(summary: RubyProgramSummary, projectRoot: Option[String])
             .listFiles()
             .map(_.toString.stripPrefix(s"$projectRoot${JFile.separator}").stripSuffix(".rb").replaceAll("\\\\", "/"))
             .toList
+            .sorted // directory listing order is file system dependent
         else Nil
       } else {
         resolvedPath :: Nil
@@ -238,8 +243,8 @@ class RubyScope(summary: RubyProgramSummary, projectRoot: Option[String])
   }
 
   def addImportedFunctions(importName: String): Unit = {
-    val matchingTypes = summary.namespaceToType.values.flatten.filter { x =>
-      x.name.startsWith(importName)
+    val matchingTypes = summary.allTypesSorted.filter { candidateType =>
+      candidateType.name.startsWith(importName)
     }
 
     typesInScope.addAll(matchingTypes)
@@ -250,7 +255,7 @@ class RubyScope(summary: RubyProgramSummary, projectRoot: Option[String])
   }
 
   def addRequireGem(gemName: String): Unit = {
-    val matchingTypes = summary.namespaceToType.values.flatten.filter(_.name.startsWith(gemName))
+    val matchingTypes = summary.allTypesSorted.filter(_.name.startsWith(gemName))
     typesInScope.addAll(matchingTypes)
   }
 

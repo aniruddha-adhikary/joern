@@ -355,12 +355,19 @@ trait RustVisitor(implicit withSchemaValidation: ValidationMode) { this: AstCrea
       case recordPat: RecordPat           => createAssignmentsForRecordPattern(recordPat, mkSourceAst)
       case tuplePat: TuplePat             => createAssignmentsForTuplePattern(tuplePat, mkSourceAst)
       case tupleStructPat: TupleStructPat => createAssignmentsForTupleStructPattern(tupleStructPat, mkSourceAst)
+      case slicePat: SlicePat             => createAssignmentsForSlicePattern(slicePat, mkSourceAst)
       case wildcardPat: WildcardPat       => Nil
       case literalPat: LiteralPat         => Nil
+      case rangePat: RangePat             => Nil
       case pathPat: PathPat               => Nil
       case refPat: RefPat                 => createAssignmentsForRefPattern(refPat, mkSourceAst)
       case orPat: OrPat                   => createAssignmentsForOrPattern(orPat, mkSourceAst)
-      case _                              => notHandledYet(pat) :: Nil
+      case macroPat: MacroPat             =>
+        macroPat.macroCall.macroExpansion match {
+          case Some(pat: Pat) => createAssignmentsForPattern(pat, mkSourceAst, codeOverride)
+          case _              => macroNotExpanded(macroPat.macroCall) :: Nil
+        }
+      case _ => notHandledYet(pat) :: Nil
     }
   }
 
@@ -413,6 +420,34 @@ trait RustVisitor(implicit withSchemaValidation: ValidationMode) { this: AstCrea
     } else {
       assignments :+ notHandledYet(pat)
     }
+  }
+
+  // TODO(rust_ast_gen): need type and size on the patterns.
+  private def createAssignmentsForSlicePattern(slicePat: SlicePat, mkSourceAst: () => Ast): Seq[Ast] = {
+    val (prefix, fromRest) = slicePat.pat.span(!matchesRest(_))
+    val assignments        = prefix.zipWithIndex.flatMap { case (element, index) =>
+      val elementType          = typeFullNameForPat(element)
+      def mkIndexAccess(): Ast = {
+        val sourceAst       = mkSourceAst()
+        val indexAccessCode = s"${sourceAst.rootCodeOrEmpty}[$index]"
+        val indexAst        = Ast(literalNode(element, index.toString, "usize"))
+        val callNode        = operatorCallNode(element, indexAccessCode, Operators.indexAccess, Some(elementType))
+        callAst(callNode, Seq(sourceAst, indexAst))
+      }
+      createAssignmentsForPattern(element, mkIndexAccess)
+    }
+    val bindingsFromRest = fromRest.flatMap(collectPatternBindings)
+    if (bindingsFromRest.isEmpty) {
+      assignments
+    } else {
+      assignments :+ notHandledYet(slicePat)
+    }
+  }
+
+  private def matchesRest(pat: Pat): Boolean = pat match {
+    case identPat: IdentPat => identPat.pat.exists(matchesRest)
+    case _: RestPat         => true
+    case _                  => false
   }
 
   private def createAssignmentsForRecordPattern(recordPat: RecordPat, mkSourceAst: () => Ast): Seq[Ast] = {
@@ -516,12 +551,16 @@ trait RustVisitor(implicit withSchemaValidation: ValidationMode) { this: AstCrea
         nameBindings ++ patBindings
       }
     case literalPat: LiteralPat => Nil
-    case macroPat: MacroPat     => Nil // TODO: needs to see the macro expansion.
-    case orPat: OrPat           => orPat.pat.headOption.map(collectPatternBindings).getOrElse(Nil)
-    case parenPat: ParenPat     => collectPatternBindings(parenPat.pat)
-    case pathPat: PathPat       => Nil
-    case rangePat: RangePat     => Nil
-    case recordPat: RecordPat   =>
+    case macroPat: MacroPat     =>
+      macroPat.macroCall.macroExpansion match {
+        case Some(pat: Pat) => collectPatternBindings(pat)
+        case _              => Nil
+      }
+    case orPat: OrPat         => orPat.pat.headOption.map(collectPatternBindings).getOrElse(Nil)
+    case parenPat: ParenPat   => collectPatternBindings(parenPat.pat)
+    case pathPat: PathPat     => Nil
+    case rangePat: RangePat   => Nil
+    case recordPat: RecordPat =>
       recordPat.recordPatFieldList.recordPatField.flatMap(field => collectPatternBindings(field.pat))
     case refPat: RefPat                 => collectPatternBindings(refPat.pat)
     case restPat: RestPat               => Nil
@@ -642,7 +681,8 @@ trait RustVisitor(implicit withSchemaValidation: ValidationMode) { this: AstCrea
           visitFn(fn).withChild(Ast(NewModifier().modifierType(ModifierTypes.VIRTUAL)))
         }
         val constMemberAsts = impl.assocItemList.assocItem.collect {
-          case const: Const if const.name.isDefined => Ast(memberForAssocConst(const))
+          case const: Const if const.name.isDefined =>
+            Ast(memberForAssocConst(const)).withChildren(const.attr.map(visitAttr))
         }
         contextStack.pop()
         val attributes = impl.attr.map(visitAttr)
@@ -659,7 +699,8 @@ trait RustVisitor(implicit withSchemaValidation: ValidationMode) { this: AstCrea
     contextStack.pushTypeDecl(typeDeclForImpl(impl))
     val itemAsts = impl.assocItemList.assocItem.collect {
       case fn: Fn                               => visitFn(fn)
-      case const: Const if const.name.isDefined => Ast(memberForAssocConst(const))
+      case const: Const if const.name.isDefined =>
+        Ast(memberForAssocConst(const)).withChildren(const.attr.map(visitAttr))
     }
     contextStack.pop()
     itemAsts.foreach(addDetachedAst)
@@ -689,7 +730,8 @@ trait RustVisitor(implicit withSchemaValidation: ValidationMode) { this: AstCrea
       visitFn(fn).withChild(Ast(NewModifier().modifierType(ModifierTypes.VIRTUAL)))
     }
     val constMemberAsts = trait_.assocItemList.toSeq.flatMap(_.assocItem).collect {
-      case const: Const if const.name.isDefined => Ast(memberForAssocConst(const))
+      case const: Const if const.name.isDefined =>
+        Ast(memberForAssocConst(const)).withChildren(const.attr.map(visitAttr))
     }
     contextStack.pop()
     val attributes = trait_.attr.map(visitAttr)
@@ -802,6 +844,7 @@ trait RustVisitor(implicit withSchemaValidation: ValidationMode) { this: AstCrea
         case Some(pat) if collectPatternBindings(pat).nonEmpty       => (code(pat), Some(pat))
         case pat                                                     => (contextStack.nextTmpName(), pat)
       }
+      val attributes   = param.attr.map(visitAttr)
       val typeFullName = typeFullNameForParam(param)
       val paramNode    = parameterInNode(
         node = param,
@@ -818,7 +861,7 @@ trait RustVisitor(implicit withSchemaValidation: ValidationMode) { this: AstCrea
         val mkParamIdentAst = () => identifierAst(pat, paramName, paramName, typeFullName)
         createLocalsForBindings(collectPatternBindings(pat)) ++ createAssignmentsForPattern(pat, mkParamIdentAst)
       }
-      (Ast(paramNode), patternAssignmentAsts)
+      (Ast(paramNode).withChildren(attributes), patternAssignmentAsts)
     }.unzip
 
     (selfParamAst ++ paramAsts, paramAssignmentAsts.flatten)
@@ -827,6 +870,7 @@ trait RustVisitor(implicit withSchemaValidation: ValidationMode) { this: AstCrea
   // SelfParam =
   //  Attr* ( ('&' Lifetime?)? 'mut'? Name | 'mut'? Name ':' Type )
   private def visitSelfParam(selfParam: SelfParam): Ast = {
+    val attributes         = selfParam.attr.map(visitAttr)
     val typeFullName       = typeFullNameForSelfParam(selfParam)
     val evaluationStrategy =
       if (selfParam.ampToken.isDefined) EvaluationStrategies.BY_SHARING else EvaluationStrategies.BY_VALUE
@@ -840,7 +884,7 @@ trait RustVisitor(implicit withSchemaValidation: ValidationMode) { this: AstCrea
       typeFullName = typeFullName
     )
     contextStack.declareParameter(paramNode)
-    Ast(paramNode)
+    Ast(paramNode).withChildren(attributes)
   }
 
   // PathExpr =
@@ -950,6 +994,8 @@ trait RustVisitor(implicit withSchemaValidation: ValidationMode) { this: AstCrea
     ifExpr.expr match {
       case letExpr: LetExpr =>
         lowerIfLet(ifExpr, letExpr)
+      case binExpr: BinExpr if isLetChain(binExpr) =>
+        lowerIfLetChain(ifExpr, binExpr)
       case condition =>
         val conditionAst = visitExpr(condition)
         val thenAst      = visitBlockExpr(ifExpr.thenBranch)
@@ -994,6 +1040,75 @@ trait RustVisitor(implicit withSchemaValidation: ValidationMode) { this: AstCrea
     blockAst(blockNode(ifExpr), List(tmpLocalAst, tmpAssignAst, ifAst))
   }
 
+  // `if let pat1 = expr1 && let pat2 = expr2 { then } else { else }` becomes:
+  // BLOCK {
+  //   LOCAL tmp1
+  //   tmp1 = expr1
+  //   <createLocalsForBindings(pat1)>
+  //   <createAssignmentsForPattern(pat1, tmp1)>
+  //
+  //   LOCAL tmp2
+  //   tmp2 = expr2
+  //   <createLocalsForBindings(pat2)>
+  //   <createAssignmentsForPattern(pat2, tmp2)>
+  //
+  //   IF (UNKNOWN(pat1) && UNKNOWN(pat2)) {
+  //    then
+  //   }
+  //   ELSE {
+  //    else
+  //   }
+  // }
+  private def lowerIfLetChain(ifExpr: IfExpr, binExpr: BinExpr): Ast = {
+    contextStack.pushBlock()
+    val (bindingAsts, conditionAst) = lowerLetChain(binExpr)
+    val thenAst                     = visitBlockExpr(ifExpr.thenBranch)
+    contextStack.pop()
+
+    val elseAst = ifExpr.elseBranch.map(visitExpr)
+    val ifAst   = ifThenElseAst(ifExpr, Some(conditionAst), thenAst, elseAst)
+
+    blockAst(blockNode(ifExpr), (bindingAsts :+ ifAst).toList)
+  }
+
+  private def isLetChain(binExpr: BinExpr): Boolean = {
+    binExpr.amp2Token.isDefined && binExpr.expr.exists {
+      case _: LetExpr    => true
+      case expr: BinExpr => isLetChain(expr)
+      case _             => false
+    }
+  }
+
+  private def lowerLetChain(expr: Expr): (bindingAsts: Seq[Ast], conditionAst: Ast) = {
+    expr match {
+      case letExpr: LetExpr =>
+        val tmpName      = contextStack.nextTmpName()
+        val rhsAst       = visitExpr(letExpr.expr)
+        val typeFullName = rhsAst.rootType.getOrElse(Defines.Any)
+        val tmpLocalAst  = localAst(letExpr, tmpName, tmpName, typeFullName)
+        val mkTmpAst     = () => identifierAst(letExpr, tmpName, tmpName, typeFullName)
+        val tmpAssignAst =
+          callAst(assignmentNode(letExpr, s"$tmpName = ${code(letExpr.expr)}"), Seq(mkTmpAst(), rhsAst))
+        val localAsts    = createLocalsForBindings(collectPatternBindings(letExpr.pat))
+        val assignments  = createAssignmentsForPattern(letExpr.pat, mkTmpAst)
+        val conditionAst = Ast(unknownNode(letExpr.pat, code(letExpr.pat)))
+
+        (tmpLocalAst +: tmpAssignAst +: (localAsts ++ assignments), conditionAst)
+
+      case binExpr: BinExpr if isLetChain(binExpr) =>
+        val typeFullName  = typeFullNameForExpr(binExpr)
+        val callNode      = operatorCallNode(binExpr, code(binExpr), Operators.logicalAnd, Some(typeFullName))
+        val Seq(lhs, rhs) = binExpr.expr
+        val (lhsBindingAsts, lhsConditionAst) = lowerLetChain(lhs)
+        val (rhsBindingAsts, rhsConditionAst) = lowerLetChain(rhs)
+
+        (lhsBindingAsts ++ rhsBindingAsts, callAst(callNode, Seq(lhsConditionAst, rhsConditionAst)))
+
+      case condition =>
+        (Nil, visitExpr(condition))
+    }
+  }
+
   // CastExpr =
   //  Attr* Expr 'as' Type
   private def visitCastExpr(castExpr: CastExpr): Ast = {
@@ -1012,6 +1127,8 @@ trait RustVisitor(implicit withSchemaValidation: ValidationMode) { this: AstCrea
     whileExpr.expr match {
       case letExpr: LetExpr =>
         lowerWhileLet(whileExpr, letExpr)
+      case binExpr: BinExpr if isLetChain(binExpr) =>
+        lowerWhileLetChain(whileExpr, binExpr)
       case condition =>
         val conditionAst = visitExpr(condition)
         val bodyAst      = visitBlockExpr(whileExpr.blockExpr)
@@ -1048,6 +1165,39 @@ trait RustVisitor(implicit withSchemaValidation: ValidationMode) { this: AstCrea
       (tmpLocalAst +: tmpAssignAst +: (localAsts ++ assignments ++ bodyAsts)).toList
     )
     whileAst(whileExpr, Some(conditionAst), Seq(bodyAst))
+  }
+
+  // `while let pat1 = expr1 && let pat2 = expr2 { body }` becomes:
+  // WHILE (true) {
+  //   LOCAL tmp1
+  //   tmp1 = expr1
+  //   <createLocalsForBindings(pat1)>
+  //   <createAssignmentsForPattern(pat1, tmp1)>
+  //
+  //   LOCAL tmp2
+  //   tmp2 = expr2
+  //   <createLocalsForBindings(pat2)>
+  //   <createAssignmentsForPattern(pat2, tmp2)>
+  //
+  //   IF (UNKNOWN(pat1) && UNKNOWN(pat2)) {
+  //    body
+  //   }
+  //   ELSE {
+  //    break
+  //   }
+  // }
+  private def lowerWhileLetChain(whileExpr: WhileExpr, binExpr: BinExpr): Ast = {
+    contextStack.pushBlock()
+    val (bindingAsts, conditionAst) = lowerLetChain(binExpr)
+    val thenAst                     = visitBlockExpr(whileExpr.blockExpr)
+    contextStack.pop()
+
+    val elseAst = blockAst(blockNode(whileExpr), List(breakAst(whileExpr, "break")))
+    val ifAst   = ifThenElseAst(whileExpr, Some(conditionAst), thenAst, Some(elseAst))
+
+    val trueAst = Ast(literalNode(whileExpr.whileKwToken, "true", "bool"))
+    val bodyAst = blockAst(blockNode(whileExpr), (bindingAsts :+ ifAst).toList)
+    whileAst(whileExpr, Some(trueAst), Seq(bodyAst))
   }
 
   // LoopExpr =
@@ -1203,7 +1353,7 @@ trait RustVisitor(implicit withSchemaValidation: ValidationMode) { this: AstCrea
   // BLOCK
   //   LOCAL tmp
   //   tmp = <operator>.alloc
-  //   Foo::<init>(&tmp, x:1, y:2)
+  //   Foo::<init>(tmp, x:1, y:2)
   //   tmp
   private def recordCtorCallAst(recordExpr: RecordExpr): Ast = {
     val structType       = typeFullNameForExpr(recordExpr)
@@ -1221,18 +1371,13 @@ trait RustVisitor(implicit withSchemaValidation: ValidationMode) { this: AstCrea
         Some("()")
       )
 
-      val addressOfTmp = {
-        val addressOf = operatorCallNode(recordExpr, s"&$tmpName", Operators.addressOf, Some(s"&$structType"))
-        callAst(addressOf, Seq(mkTmp(recordExpr)))
-      }
-
       val fieldArgs = recordExpr.recordExprFieldList.recordExprField.map { field =>
         val fieldName = field.nameRef.orElse(viewExprAsNameRef(field.expr)).map(code)
         val argAst    = visitExpr(field.expr)
         argAst.root.foreach { case expr: ExpressionNew => expr.argumentName(fieldName) }
         argAst
       }
-      callAst(initCall, fieldArgs, base = Some(addressOfTmp)) :: Nil
+      callAst(initCall, fieldArgs, base = Some(mkTmp(recordExpr))) :: Nil
     }
   }
 
@@ -1313,12 +1458,32 @@ trait RustVisitor(implicit withSchemaValidation: ValidationMode) { this: AstCrea
   //  | Expr ';' Expr
   //  )']'
   private def visitArrayExpr(arrayExpr: ArrayExpr): Ast = {
-    val typeFullName = typeFullNameForExpr(arrayExpr)
     val isRepeatForm = arrayExpr.semicolonToken.isDefined
-    val operator     = if (isRepeatForm) RustOperators.repeatInArray else Operators.arrayInitializer
-    val callNode     = operatorCallNode(arrayExpr, code(arrayExpr), operator, Some(typeFullName))
+    if (isRepeatForm) {
+      lowerRepeatInArrayExpr(arrayExpr)
+    } else {
+      lowerArrayInitializerExpr(arrayExpr)
+    }
+  }
 
+  private def lowerArrayInitializerExpr(arrayExpr: ArrayExpr): Ast = {
+    val typeFullName = typeFullNameForExpr(arrayExpr)
+    val callNode     = operatorCallNode(arrayExpr, code(arrayExpr), Operators.arrayInitializer, Some(typeFullName))
     callAst(callNode, arrayExpr.expr.map(visitExpr))
+  }
+
+  private def lowerRepeatInArrayExpr(arrayExpr: ArrayExpr): Ast = {
+    val typeFullName = typeFullNameForExpr(arrayExpr)
+    val callNode     = operatorCallNode(arrayExpr, code(arrayExpr), RustOperators.repeatInArray, Some(typeFullName))
+    val Seq(value, count) = arrayExpr.expr
+    val valueAst          = visitExpr(value)
+    val countAst          = count match {
+      case underscoreExpr: UnderscoreExpr =>
+        Ast(literalNode(underscoreExpr, code(underscoreExpr), typeFullNameForExpr(underscoreExpr)))
+      case other =>
+        visitExpr(other)
+    }
+    callAst(callNode, Seq(valueAst, countAst))
   }
 
   // FieldExpr =
@@ -1470,7 +1635,7 @@ trait RustVisitor(implicit withSchemaValidation: ValidationMode) { this: AstCrea
 
   // `struct Foo;` becomes:
   // TYPE_DECL Foo
-  //   CONSTRUCTOR <init>(&self: Foo) -> () {}
+  //   CONSTRUCTOR <init>(self: Foo) -> () {}
   private def lowerUnitStruct(struct: Struct): Ast = {
     val implementedTraits = struct.implementedTraits.getOrElse(Nil)
     val structFullName    = typeFullNameForStruct(struct)
@@ -1489,8 +1654,8 @@ trait RustVisitor(implicit withSchemaValidation: ValidationMode) { this: AstCrea
   // TYPE_DECL Foo
   //   MEMBER x: T
   //   ...
-  //   CONSTRUCTOR <init>(&self: Foo, x: T, ...) -> () {
-  //     (*self).x = x
+  //   CONSTRUCTOR <init>(self: Foo, x: T, ...) -> () {
+  //     self.x = x
   //     ...
   //   }
   private def lowerRecordStruct(struct: Struct, recordFieldList: RecordFieldList): Ast = {
@@ -1514,15 +1679,15 @@ trait RustVisitor(implicit withSchemaValidation: ValidationMode) { this: AstCrea
   //    MEMBER 0: T1
   //    MEMBER 1: T2
   //    ...
-  //    CONSTRUCTOR <init>(&self: Foo, 0: T1, 1: T2, ...)` -> () {
-  //      (*self).0 = 0
-  //      (*self).1 = 1
+  //    CONSTRUCTOR <init>(self: Foo, 0: T1, 1: T2, ...)` -> () {
+  //      self.0 = 0
+  //      self.1 = 1
   //      ...
   //    }
   //  METHOD Foo(0: T1, 1: T2, ...) -> Foo {
   //    LOCAL tmp
   //    tmp = <operator>.alloc
-  //    Foo::<init>(&tmp, 0, 1)
+  //    Foo::<init>(tmp, 0, 1)
   //    return tmp
   //  }
   // NB: tuple struct literals, e.g. `Foo(1, 2)`, are regular calls, hence the extra method.
@@ -1587,10 +1752,10 @@ trait RustVisitor(implicit withSchemaValidation: ValidationMode) { this: AstCrea
       callAst(assignmentNode(node, s"$tmpName = ${Operators.alloc}"), Seq(tmpIdentAst, Ast(allocCall)))
     }
 
-    // Foo::<init>(&tmp, 0, 1, ...)
+    // Foo::<init>(tmp, 0, 1, ...)
     val initCallAst = {
       val initName = Defines.ConstructorMethodName
-      val initCode = s"$fnName::$initName(${(s"&$tmpName" +: fields.map(_.name)).mkString(", ")})"
+      val initCode = s"$fnName::$initName(${(tmpName +: fields.map(_.name)).mkString(", ")})"
       val initCall = callNode(
         node = node,
         code = initCode,
@@ -1600,16 +1765,12 @@ trait RustVisitor(implicit withSchemaValidation: ValidationMode) { this: AstCrea
         signature = None,
         typeFullName = Some("()")
       )
-      val addressOfTmp = {
-        val addressOf   = operatorCallNode(node, s"&$tmpName", Operators.addressOf, Some(s"&${typeDecl.fullName}"))
-        val tmpIdentAst = Ast(identifierNode(node, tmpName, tmpName, typeDecl.fullName))
-        callAst(addressOf, Seq(tmpIdentAst))
-      }
-      val fieldArgs = fields.map { fieldData =>
+      val tmpIdentAst = Ast(identifierNode(node, tmpName, tmpName, typeDecl.fullName))
+      val fieldArgs   = fields.map { fieldData =>
         Ast(identifierNode(fieldData.node, fieldData.name, fieldData.name, fieldData.typ))
       }
 
-      callAst(initCall, fieldArgs, base = Some(addressOfTmp))
+      callAst(initCall, fieldArgs, base = Some(tmpIdentAst))
     }
 
     // return tmp
@@ -1664,23 +1825,19 @@ trait RustVisitor(implicit withSchemaValidation: ValidationMode) { this: AstCrea
       )
     }
 
-    // (*self).x = x; etc.
+    // self.x = x; etc.
     val fieldAssignAsts = fields.zip(fieldParams).map { case (fieldData, fieldParam) =>
-      val selfAst   = identifierAst(fieldData.node, selfName, selfName, s"&${typeDecl.fullName}")
-      val derefSelf = callAst(
-        operatorCallNode(fieldData.node, s"*$selfName", Operators.indirection, Some(typeDecl.fullName)),
-        Seq(selfAst)
-      )
-      val lhs = fieldAccessAst(
+      val selfAst = identifierAst(fieldData.node, selfName, selfName, typeDecl.fullName)
+      val lhs     = fieldAccessAst(
         fieldData.node,
         fieldData.node,
-        derefSelf,
-        s"(*$selfName).${fieldData.name}",
+        selfAst,
+        s"$selfName.${fieldData.name}",
         fieldData.name,
         fieldData.typ
       )
       val rhs = identifierAst(fieldData.node, fieldData.name, fieldData.name, fieldData.typ)
-      callAst(assignmentNode(fieldData.node, s"(*$selfName).${fieldData.name} = ${fieldData.name}"), Seq(lhs, rhs))
+      callAst(assignmentNode(fieldData.node, s"$selfName.${fieldData.name} = ${fieldData.name}"), Seq(lhs, rhs))
     }
 
     val paramAsts = (selfParam +: fieldParams).map(Ast(_))
@@ -1921,6 +2078,7 @@ trait RustVisitor(implicit withSchemaValidation: ValidationMode) { this: AstCrea
   }
 
   private def lowerClosureExprAsDetachedAst(closureExpr: ClosureExpr, method: NewMethod): Unit = {
+    val attributes                       = closureExpr.attr.map(visitAttr)
     val (paramAsts, paramAssignmentAsts) = lowerParamList(closureExpr.paramList)
     val bodyAst                          = closureExpr.expr match {
       case blockExpr: BlockExpr => lowerFnBody(blockExpr, paramAssignmentAsts)
@@ -1932,7 +2090,7 @@ trait RustVisitor(implicit withSchemaValidation: ValidationMode) { this: AstCrea
     }
     val methodRet = methodReturnNode(closureExpr, retTypeFullName)
     val modifiers = Seq(ModifierTypes.VIRTUAL, ModifierTypes.LAMBDA).map(modifierNode(closureExpr, _))
-    addDetachedAst(methodAst(method, paramAsts, bodyAst, methodRet, modifiers))
+    addDetachedAst(methodAstWithAnnotations(method, paramAsts, bodyAst, methodRet, modifiers, attributes))
   }
 
   // Use =
@@ -2022,7 +2180,7 @@ trait RustVisitor(implicit withSchemaValidation: ValidationMode) { this: AstCrea
   // BLOCK
   //   LOCAL tmp
   //   tmp = <operator>.alloc
-  //   Foo::<init>(&tmp)
+  //   Foo::<init>(tmp)
   //   tmp
   private def unitCtorCallAst(pathExpr: PathExpr, ctorTypeFullName: String): Ast = {
     val typeFullName = typeFullNameForExpr(pathExpr)
@@ -2038,11 +2196,7 @@ trait RustVisitor(implicit withSchemaValidation: ValidationMode) { this: AstCrea
         None,
         Some("()")
       )
-      val addressOfTmp = {
-        val addressOf = operatorCallNode(pathExpr, s"&$tmpName", Operators.addressOf, Some(s"&$typeFullName"))
-        callAst(addressOf, Seq(mkTmp(pathExpr)))
-      }
-      callAst(initCall, Nil, base = Some(addressOfTmp)) :: Nil
+      callAst(initCall, Nil, base = Some(mkTmp(pathExpr))) :: Nil
     }
   }
 }

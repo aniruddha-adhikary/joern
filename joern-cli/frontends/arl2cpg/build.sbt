@@ -1,3 +1,5 @@
+import sbt.BareBuildSyntax.dependsOn
+
 name := "arl2cpg"
 
 dependsOn(
@@ -15,7 +17,6 @@ libraryDependencies ++= Seq(
 
 enablePlugins(Antlr4Plugin, JavaAppPackaging, LauncherJarPlugin)
 
-Antlr4 / antlr4PackageName := Some("io.joern.arl2cpg.parser")
-Antlr4 / antlr4Version     := Versions.antlr
-Antlr4 / javaSource        := (Compile / sourceManaged).value
+Antlr4 / antlr4Package := Some("io.joern.arl2cpg.parser")
+Antlr4 / antlr4Version := Some(Versions.antlr)
 Compile / doc / sources ~= (_ filter (_ => false))
