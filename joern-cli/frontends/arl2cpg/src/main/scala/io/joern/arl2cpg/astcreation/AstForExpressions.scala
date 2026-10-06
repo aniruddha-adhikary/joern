@@ -377,10 +377,8 @@ trait AstForExpressions {
       !isLikelyTypeName(first) &&
       (packageQualifiedTypePrefix.isDefined || packageQualifiedThisType.isDefined)
     ) {
-      val (typeName, remaining) = packageQualifiedTypePrefix
-        .map(identity)
-        .orElse(packageQualifiedThisType.map((_, Nil)))
-        .get
+      val (typeName, remaining) =
+        packageQualifiedThisType.map((_, Nil)).orElse(packageQualifiedTypePrefix).get
       if (hasArgs && remaining.size == 1) {
         val method = remaining.head
         val call   = callNode(
