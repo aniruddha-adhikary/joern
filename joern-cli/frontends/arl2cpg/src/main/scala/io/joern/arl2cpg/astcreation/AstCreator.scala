@@ -122,11 +122,28 @@ class AstCreator(
   // position / code helpers required by AstNodeBuilder
   // ------------------------------------------------------------------
 
+  private def firstTerminalToken(tree: ParseTree): Option[org.antlr.v4.runtime.Token] =
+    tree match {
+      case terminal: TerminalNode     => Option(terminal.getSymbol)
+      case context: ParserRuleContext =>
+        Option(context.children).toList
+          .flatMap(_.asScala)
+          .iterator
+          .flatMap(firstTerminalToken)
+          .take(1)
+          .toList
+          .headOption
+      case _ => None
+    }
+
+  private def positionToken(node: ParserRuleContext) =
+    Option(node).flatMap(ctx => Option(ctx.getStart).orElse(Option(ctx.getStop)).orElse(firstTerminalToken(ctx)))
+
   override protected def line(node: ParserRuleContext): Option[Int] =
-    Option(node.getStart).map(_.getLine)
+    positionToken(node).map(_.getLine)
 
   override protected def column(node: ParserRuleContext): Option[Int] =
-    Option(node.getStart).map(_.getCharPositionInLine)
+    positionToken(node).map(_.getCharPositionInLine)
 
   override protected def lineEnd(node: ParserRuleContext): Option[Int] =
     Option(node.getStop).map(_.getLine)
