@@ -1,6 +1,7 @@
 package io.joern.arl2cpg
 
-import io.joern.arl2cpg.ArlFindings.{Codes, Keys}
+import io.joern.x2cpg.frontendspecific.arl2cpg.ArlFindings
+import io.joern.x2cpg.frontendspecific.arl2cpg.ArlFindings.{Codes, Keys}
 import io.joern.x2cpg.Defines
 import io.joern.x2cpg.X2Cpg
 import io.joern.x2cpg.frontendspecific.arl2cpg.ArlExport
@@ -72,8 +73,20 @@ ruleset R (S) {
     if (bomPaths.nonEmpty) config = config.withBomPaths(bomPaths)
     if (bomRoots.nonEmpty) config = config.withBomRoots(bomRoots)
     val cpg = new Arl2Cpg().createCpg(config).get
-    try test(cpg)
+    try {
+      assertEveryArlCallHasSourcePosition(cpg)
+      test(cpg)
+    }
     finally cpg.close()
+  }
+
+  private def assertEveryArlCallHasSourcePosition(cpg: Cpg): Unit = {
+    val missing = cpg.call.l.filter(call =>
+      call.file.name.headOption.exists(_.endsWith(".arl")) && (call.lineNumber.isEmpty || call.columnNumber.isEmpty)
+    )
+    withClue(s"ARL CALLs missing lineNumber or columnNumber: ${missing.map(_.code).mkString(", ")}") {
+      missing shouldBe empty
+    }
   }
 
   private def findCall(cpg: Cpg, name: String, code: String) =
