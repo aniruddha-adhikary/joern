@@ -733,6 +733,7 @@ ruleset R (S) {
             |java.lang.Boolean.valueOf(this.borrower.lastName.isEmpty());
             |java.lang.System.out.println("x");
             |ilog.rules.brl.Engine.this.note("x");
+            |x = java.lang.Math.PI;
             |foo.bar.baz(1);
             |""".stripMargin
         val imports = Seq(
@@ -839,6 +840,12 @@ ruleset R (S) {
             "void",
             DispatchTypes.DYNAMIC_DISPATCH
           )
+          val piAccess = cpg.call.name(Operators.fieldAccess).find(_.code == "java.lang.Math.PI").get
+          piAccess.typeFullName shouldBe "double"
+          val piBase = piAccess.argument.l.collectFirst { case identifier: Identifier => identifier }.get
+          piBase.name shouldBe "java.lang.Math"
+          piBase.code shouldBe "java.lang.Math"
+          piBase.typeFullName shouldBe "java.lang.Math"
           val lowercaseCall = findCall(cpg, "baz", "foo.bar.baz(1)").get
           lowercaseCall.dispatchType shouldBe DispatchTypes.DYNAMIC_DISPATCH
           lowercaseCall.methodFullName shouldBe s"${Defines.UnresolvedNamespace}.baz:${Defines.UnresolvedSignature}(2)"

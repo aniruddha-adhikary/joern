@@ -292,8 +292,25 @@ trait AstForExpressions {
       acc
     }
 
+    def packageQualifiedThisType: Option[String] = {
+      val hasImmediateThisSelector = Option(ctx.getParent)
+        .collect { case primary: ARLParser.PrimaryContext => primary }
+        .flatMap(primary => Option(primary.getParent).collect { case postfix: ARLParser.PostfixContext => postfix })
+        .exists(_.selector().asScala.headOption.exists(_.getText == "this"))
+      val start = (1 until segments.size).find { k =>
+        segments.take(k).forall(_.headOption.exists(_.isLower)) &&
+        segments(k).headOption.exists(_.isUpper)
+      }
+      Option
+        .when(hasImmediateThisSelector)(start.map { k =>
+          val classSegmentCount = segments.drop(k + 1).takeWhile(_.headOption.exists(_.isUpper)).size
+          segments.take(k + 1 + classSegmentCount).mkString(".")
+        })
+        .flatten
+    }
+
     def packageQualifiedTypePrefix: Option[(String, List[String])] = {
-      val typeSegmentLimit = segments.size - (if (hasArgs) 1 else 0)
+      val typeSegmentLimit = segments.size - 1
       val start            = (1 until typeSegmentLimit).find { k =>
         segments.take(k).forall(_.headOption.exists(_.isLower)) &&
         segments(k).headOption.exists(_.isUpper)
@@ -358,9 +375,12 @@ trait AstForExpressions {
       !isBoundValue(first) &&
       !signatureMembers.contains(first) &&
       !isLikelyTypeName(first) &&
-      packageQualifiedTypePrefix.isDefined
+      (packageQualifiedTypePrefix.isDefined || packageQualifiedThisType.isDefined)
     ) {
-      val (typeName, remaining) = packageQualifiedTypePrefix.get
+      val (typeName, remaining) = packageQualifiedTypePrefix
+        .map(identity)
+        .orElse(packageQualifiedThisType.map((_, Nil)))
+        .get
       if (hasArgs && remaining.size == 1) {
         val method = remaining.head
         val call   = callNode(
@@ -375,7 +395,7 @@ trait AstForExpressions {
         callAst(call, argAsts)
       } else {
         val base = Ast(identifierNode(ctx, typeName, typeName, typeName))
-        dynamicSuffix(base, remaining, argAsts, hasArgs)
+        if (remaining.isEmpty) base else dynamicSuffix(base, remaining, argAsts, hasArgs)
       }
     } else if (implicitReceiver.top.isDefined && !isLikelyTypeName(first)) {
       // unqualified name inside a pattern test → resolve against the pattern's own binding
