@@ -148,6 +148,9 @@ ruleset R (S) {
         """package ilog.rules.brl;
           |public class Engine {
           |  public void note(String value) { }
+          |  public static class Inner {
+          |    public void note(String value) { }
+          |  }
           |}
           |""".stripMargin,
       "pkg/Outer.java" ->
@@ -733,6 +736,7 @@ ruleset R (S) {
             |java.lang.Boolean.valueOf(this.borrower.lastName.isEmpty());
             |java.lang.System.out.println("x");
             |ilog.rules.brl.Engine.this.note("x");
+            |ilog.rules.brl.Engine.Inner.this.note("x");
             |x = java.lang.Math.PI;
             |foo.bar.baz(1);
             |""".stripMargin
@@ -840,6 +844,20 @@ ruleset R (S) {
             "void",
             DispatchTypes.DYNAMIC_DISPATCH
           )
+          val nestedThisCall = expectCall(
+            cpg,
+            "note",
+            """ilog.rules.brl.Engine.Inner.this.note("x")""",
+            "ilog.rules.brl.Engine$Inner.note:void(java.lang.String)",
+            "void",
+            DispatchTypes.DYNAMIC_DISPATCH
+          )
+          findingFor(cpg, nestedThisCall.id()) shouldBe empty
+          nestedThisCall.argument.l.find(_.argumentIndex == 0).get match {
+            case call: Call             => call.typeFullName shouldBe "ilog.rules.brl.Engine.Inner"
+            case identifier: Identifier => identifier.typeFullName shouldBe "ilog.rules.brl.Engine.Inner"
+            case other                  => fail(s"Unexpected nested receiver node: $other")
+          }
           val piAccess = cpg.call.name(Operators.fieldAccess).find(_.code == "java.lang.Math.PI").get
           piAccess.typeFullName shouldBe "double"
           val piBase = piAccess.argument.l.collectFirst { case identifier: Identifier => identifier }.get
