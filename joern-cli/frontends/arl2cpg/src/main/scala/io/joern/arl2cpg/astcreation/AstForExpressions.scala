@@ -7,7 +7,7 @@ import io.shiftleft.codepropertygraph.generated.nodes.*
 import io.shiftleft.codepropertygraph.generated.{ControlStructureTypes, DispatchTypes, Operators}
 import org.antlr.v4.runtime.ParserRuleContext
 import org.antlr.v4.runtime.misc.Interval
-import org.antlr.v4.runtime.tree.TerminalNode
+import org.antlr.v4.runtime.tree.{ErrorNode, TerminalNode}
 
 import scala.jdk.CollectionConverters.*
 
@@ -420,23 +420,35 @@ trait AstForExpressions {
 
   /** `[0,1]` / `]a,b[` → CALL `<operator>.interval(lo, hi)`; trailing `.selector` chain applied. */
   private def astForInterval(ctx: ARLParser.IntervalLiteralContext): Ast = {
-    val expressions           = ctx.expression().asScala.toList
-    val children              = ctx.children.asScala.toList
-    val secondExpressionIndex = children.indexWhere(_ eq expressions.last)
-    val closingBracket        =
-      children.drop(secondExpressionIndex + 1).collectFirst { case terminal: TerminalNode => terminal.getSymbol }.get
-    val startToken   = ctx.getStart
-    val intervalCode = Option(startToken.getInputStream)
-      .map(_.getText(Interval.of(startToken.getStartIndex, closingBracket.getStopIndex)))
-      .getOrElse(fileContent.substring(startToken.getStartIndex, closingBracket.getStopIndex + 1))
-    val exprs = expressions.map(astForExpression)
-    val call  = operatorCallNode(ctx, intervalCode, ArlOperators.interval, Option(Defines.Any))
-    queueIntervalTags(call, startToken.getStartIndex, startToken.getText == "[", closingBracket.getText == "]")
-    var acc = callAst(call, exprs)
-    ctx.selector().asScala.toList.foreach { sel =>
-      acc = astForSelector(sel, acc)
+    val expressions    = ctx.expression().asScala.toList
+    val openingToken   = Option(ctx.getStart).filter(token => token.getText == "[" || token.getText == "]")
+    val closingBracket = for {
+      secondExpression <- expressions.lift(1)
+      children         <- Option(ctx.children).map(_.asScala.toList)
+      childIndex = children.indexWhere(_ eq secondExpression)
+      if childIndex >= 0
+      closingToken <- children.drop(childIndex + 1).collectFirst {
+        case terminal: TerminalNode
+            if !terminal.isInstanceOf[ErrorNode] && (terminal.getText == "]" || terminal.getText == "[") =>
+          terminal.getSymbol
+      }
+    } yield closingToken
+
+    (openingToken, closingBracket) match {
+      case (Some(startToken), Some(closingToken)) =>
+        val intervalCode = Option(startToken.getInputStream)
+          .map(_.getText(Interval.of(startToken.getStartIndex, closingToken.getStopIndex)))
+          .getOrElse(fileContent.substring(startToken.getStartIndex, closingToken.getStopIndex + 1))
+        val exprs = expressions.map(astForExpression)
+        val call  = operatorCallNode(ctx, intervalCode, ArlOperators.interval, Option(Defines.Any))
+        queueIntervalTags(call, startToken.getStartIndex, startToken.getText == "[", closingToken.getText == "]")
+        var acc = callAst(call, exprs)
+        ctx.selector().asScala.toList.foreach { sel =>
+          acc = astForSelector(sel, acc)
+        }
+        acc
+      case _ => unknownAst(ctx)
     }
-    acc
   }
 
   private def astForLiteral(ctx: ARLParser.LiteralContext): Ast = {
