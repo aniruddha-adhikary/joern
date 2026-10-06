@@ -7,9 +7,11 @@ import io.shiftleft.semanticcpg.language.*
 /** The machine-readable vocabulary arl2cpg uses to say what it could not do.
   *
   * Every gap in the graph is a FINDING node (see [[ArlFindings.finding]]) whose `evidence` is the node the gap belongs
-  * to and whose key/value pairs carry a `code` (below), a `reason`, and location. Effects of calls are TAG nodes on the
-  * CALL (see [[ArlTags]]). Neither ever replaces an AST node: the CPG stays a faithful lowering, and the findings are
-  * the honest remainder — arlgraph's "never lose an edge, never guess" invariants (DESIGN.md §0) in CPG terms.
+  * to and whose key/value pairs carry a `code`, a `reason`, a centrally-derived severity, and location. Candidate
+  * values are repeated key/value pairs and are declared list-valued in [[ListValuedKeys]]. Effects of calls are TAG
+  * nodes on the CALL (see [[ArlTags]]). Neither ever replaces an AST node: the CPG stays a faithful lowering, and the
+  * findings are the honest remainder — arlgraph's "never lose an edge, never guess" invariants (DESIGN.md §0) in CPG
+  * terms.
   */
 object ArlFindings {
 
@@ -21,10 +23,13 @@ object ArlFindings {
     val Filename     = "filename"
     val Line         = "line"
     val Author       = "author"
+    val Severity     = "severity"
     val CallId       = "callId"
     val Candidates   = "candidates"
     val ReceiverType = "receiverType"
   }
+
+  val ListValuedKeys: Set[String] = Set(Keys.Candidates)
 
   val Author = "arl2cpg"
 
@@ -60,6 +65,20 @@ object ArlFindings {
     val B2xBodyCallsMethodWithoutBody = "b2x-body-calls-method-without-body"
   }
 
+  /** Severity mapping: `unknown-construct` and `syntax-error` are `error`; `unresolved-call-target` is `unresolved`;
+    * `unresolved-call-effects` is `info` only for `callee-body-not-in-artifact` and `unresolved` otherwise; and
+    * `b2x-unmodelled-element` is `unresolved`. An unknown code fails instead of receiving a default.
+    */
+  private[arl2cpg] def severity(code: String, reason: String): String = (code, reason) match {
+    case (Codes.UnknownConstruct | Codes.SyntaxError, _)                => "error"
+    case (Codes.UnresolvedCallTarget, _)                                => "unresolved"
+    case (Codes.UnresolvedCallEffects, Reasons.CalleeBodyNotInArtifact) => "info"
+    case (Codes.UnresolvedCallEffects, _)                               => "unresolved"
+    case (Codes.B2xUnmodelledElement, _)                                => "unresolved"
+    case (unknownCode, _)                                               =>
+      throw new IllegalArgumentException(s"Unknown ARL finding code '$unknownCode'")
+  }
+
   def finding(
     builder: DiffGraphBuilder,
     evidence: Option[AbstractNode],
@@ -74,6 +93,7 @@ object ArlFindings {
       NewKeyValuePair().key(Keys.Author).value(Author),
       NewKeyValuePair().key(Keys.Code).value(code),
       NewKeyValuePair().key(Keys.Reason).value(reason),
+      NewKeyValuePair().key(Keys.Severity).value(severity(code, reason)),
       NewKeyValuePair().key(Keys.Message).value(message),
       NewKeyValuePair().key(Keys.Filename).value(filename),
       NewKeyValuePair().key(Keys.Line).value(line.map(_.toString).getOrElse(""))
@@ -86,6 +106,10 @@ object ArlFindings {
   /** The value of `key` on a stored finding, empty when absent. */
   def value(finding: Finding, key: String): String =
     finding.keyValuePairs.find(_.key == key).map(_.value).getOrElse("")
+
+  /** All values of `key` on a stored finding, in key/value-pair order. */
+  def values(finding: Finding, key: String): List[String] =
+    finding.keyValuePairs.filter(_.key == key).map(_.value).toList
 
   def code(finding: Finding): String   = value(finding, Keys.Code)
   def reason(finding: Finding): String = value(finding, Keys.Reason)

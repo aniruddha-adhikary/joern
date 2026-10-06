@@ -16,14 +16,16 @@ import scala.util.Using
 class ArlCfgExportTests extends Arl2CpgSuite() {
 
   private val cfgResources = Seq("branch", "forkjoin", "loop", "subflow", "select", "prio", "modes")
+  private val bundledResources =
+    Seq("branch", "chain", "forkjoin", "loop", "modes", "prio", "select", "subflow", "upd", "xcheck")
 
   private def resource(name: String): String =
     Using.resource(Source.fromResource(s"arl/$name.arl"))(_.mkString)
 
-  private def withResourceCpg(names: Seq[String])(f: Cpg => Unit): Unit =
+  private def withResourceCpg(names: Seq[String], allowUnknown: Boolean = false)(f: Cpg => Unit): Unit =
     FileUtil.usingTemporaryDirectory("arl2cpg-cfg-export") { dir =>
       names.foreach(name => Files.writeString(dir.resolve(s"$name.arl"), resource(name)))
-      val cpg = new Arl2Cpg().createCpg(Config().withInputPath(dir.toString)).get
+      val cpg = new Arl2Cpg().createCpg(Config().withInputPath(dir.toString).withAllowUnknown(allowUnknown)).get
       try {
         X2Cpg.applyDefaultOverlays(cpg)
         f(cpg)
@@ -79,6 +81,27 @@ class ArlCfgExportTests extends Arl2CpgSuite() {
   }
 
   "ARL CFG construction" should {
+    "give every bundled ARL CALL a source line and column" in {
+      withResourceCpg(bundledResources, allowUnknown = true) { cpg =>
+        val missing = cpg.call.l
+          .filter(call =>
+            call.file.name.headOption.exists(_.endsWith(".arl")) &&
+              (call.lineNumber.isEmpty || call.columnNumber.isEmpty)
+          )
+          .sortBy(call => (call.name, call.file.name.headOption.getOrElse(""), call.lineNumber.getOrElse(-1), call.id))
+        val grouped = missing
+          .groupBy(call => (call.name, java.nio.file.Paths.get(call.file.name.head).getFileName.toString))
+          .toList
+          .sortBy(_._1)
+          .map { case ((name, file), calls) =>
+            s"$name in $file: ${calls.map(call => s"${call.lineNumber.getOrElse(-1)}:${call.columnNumber.getOrElse(-1)} ${call.code}").mkString(" | ")}"
+          }
+        withClue(s"CALLs missing lineNumber or columnNumber:\n${grouped.mkString("\n")}\n") {
+          missing.shouldBe(empty)
+        }
+      }
+    }
+
     "branch, fork, loop, subflow, select, priority, and modes according to their lowered flow order" in {
       withResourceCpg(cfgResources) { cpg =>
         val branch         = methodIn(cpg, "probe branch", "branch")

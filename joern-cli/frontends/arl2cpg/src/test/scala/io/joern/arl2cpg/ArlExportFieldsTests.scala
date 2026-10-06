@@ -1,5 +1,6 @@
 package io.joern.arl2cpg
 
+import io.joern.arl2cpg.ArlFindings.{Codes, Keys}
 import io.joern.arl2cpg.testfixtures.Arl2CpgSuite
 import io.joern.x2cpg.X2Cpg
 import io.joern.x2cpg.frontendspecific.arl2cpg.ArlExport
@@ -231,7 +232,19 @@ ruleset R (S) {
         val findings = json("findings").arr
         findings.nonEmpty.shouldBe(true)
         findings.exists(finding => finding.obj.contains("code") && finding.obj.contains("reason")).shouldBe(true)
-        findings.foreach(_.obj.values.foreach(_.str))
+        findings.foreach { finding =>
+          finding.obj.foreach { case (key, value) =>
+            if (key == Keys.Candidates) value.arr.foreach(_.str)
+            else value.str
+          }
+        }
+        val unresolvedCall = cpg.call.nameExact("noSuchExportMethod").head
+        val unresolvedTarget = findings
+          .find(_.obj.get(Keys.CallId).contains(ujson.Str(unresolvedCall.id.toString)))
+          .get
+        unresolvedTarget(Keys.Code).str.shouldBe(Codes.UnresolvedCallTarget)
+        unresolvedTarget(Keys.Severity).str.shouldBe("unresolved")
+        unresolvedTarget(Keys.Candidates).arr.shouldBe(empty)
         val stableIdsByNodeId = json("methods").arr
           .flatMap(_("nodes").arr)
           .map(node => node("id").num.toLong -> node("stableId").str)
@@ -242,10 +255,20 @@ ruleset R (S) {
             case None              => pairs
             case Some((_, callId)) => pairs :+ ("callStableId" -> stableIdsByNodeId(callId.toLong))
           }
-          withCallStableId.sortBy(_._1)
+          val valuesByKey = withCallStableId.groupMap(_._1)(_._2)
+          val findingCode = valuesByKey.get(Keys.Code).flatMap(_.headOption).getOrElse("")
+          val requiredListKeys =
+            if (findingCode == Codes.UnresolvedCallTarget) ArlFindings.ListValuedKeys else Set.empty[String]
+          (valuesByKey.keySet ++ requiredListKeys).toList.sorted.map { key =>
+            val values = valuesByKey.getOrElse(key, Nil)
+            val value =
+              if (ArlFindings.ListValuedKeys.contains(key)) ujson.Arr.from(values.sorted.map(ujson.Str(_)))
+              else ujson.Str(values.head)
+            key -> value
+          }
         }
         val actualFindings = findings.map { finding =>
-          finding.obj.toList.map { case (key, value) => key -> value.str }.sortBy(_._1)
+          finding.obj.toList.sortBy(_._1)
         }.toList
         actualFindings.shouldBe(expectedFindings)
       }
