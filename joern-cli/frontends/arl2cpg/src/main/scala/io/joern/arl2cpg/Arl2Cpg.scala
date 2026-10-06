@@ -43,13 +43,13 @@ class Arl2Cpg extends X2CpgFrontend {
       val diagnostics = new ParseDiagnostics
       MetaDataPass(cpg, Language, config.inputPath).createAndApply()
       new AstCreationPass(cpg, config, diagnostics)(config.schemaValidation).createAndApply()
-      config.xomSrcPaths.foreach(runJavasrcPasses(cpg, _))
+      config.xomSrcPaths.toSeq.sorted.foreach(runJavasrcPasses(cpg, _))
       if (config.xomSrcPaths.nonEmpty) {
         new XomMethodKindPass(cpg).createAndApply()
       }
       TypeNodePass.withTypesFromCpg(cpg).createAndApply()
-      if (config.xomSrcPaths.nonEmpty) {
-        new XomLinkerPass(cpg).createAndApply()
+      if (config.xomSrcPaths.nonEmpty || config.xomClasspath.nonEmpty) {
+        new XomLinkerPass(cpg, config.xomClasspath).createAndApply()
       }
       new B2xEffectsPass(cpg, b2x).createAndApply()
       new FindingsPass(cpg, diagnostics, config.allowUnknown).createAndApply()

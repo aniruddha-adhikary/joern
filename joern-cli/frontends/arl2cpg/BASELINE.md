@@ -53,6 +53,33 @@ None on this corpus: every parse-tree node of the 129 files lowers to a typed CP
 These are the residual risk once the DCS ruleset becomes available; rerun the runner over it before retiring
 `tools/arlgraph`.
 
+## Call resolution baseline
+
+`ResolutionCoverageRunner` measures Java call resolution over the bundled ARL files with the synthetic XOM sources in
+`src/test/resources/xom`. Run it with:
+
+```text
+sbt "arl2cpg/Test/runMain io.joern.arl2cpg.ResolutionCoverageRunner \
+  joern-cli/frontends/arl2cpg/src/test/resources/arl \
+  joern-cli/frontends/arl2cpg/src/test/resources/xom \
+  --resolved-out joern-cli/frontends/arl2cpg/src/test/resources/golden/resolved-calls.tsv"
+```
+
+It reports total non-operator CALLs, resolved and unresolved counts, and unresolved counts by finding reason when
+available. The runner accepts repeated `--xom-classpath <path>` arguments and passes them to the linker in order; the
+baseline invocation above uses only XOM sources. The TSV has a header followed by sorted `filename`, `line`, `code`,
+and `methodFullName` columns.
+`ResolutionRegressionTests` requires every call resolved by the current linker to retain exactly the same target.
+
+Before argument-aware resolution was implemented, the bundled resources measured:
+
+| metric | value |
+|---|---:|
+| non-operator CALLs | 4,313 |
+| resolved | 3,053 |
+| unresolved | 1,260 |
+| unresolved by finding reason | none (call-target findings not implemented yet) |
+
 ## Gate 1
 
 Since this change any `UNKNOWN`, any file with syntax errors and any unmodelled `b2x` element is recorded as a

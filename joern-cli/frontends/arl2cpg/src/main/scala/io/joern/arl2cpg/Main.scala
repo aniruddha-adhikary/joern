@@ -8,6 +8,8 @@ import scopt.OParser
   *
   * @param xomSrcPaths
   *   Java sources of the eXecution Object Model, imported into the same CPG.
+  * @param xomClasspath
+  *   ordered classpath jars or directories used to resolve XOM methods.
   * @param taskIdentityPaths
   *   task identity sidecars (JSON lines) tying flattened task declarations to authored ruleflow uuids.
   * @param b2xPath
@@ -18,6 +20,7 @@ import scopt.OParser
   */
 final case class Config(
   xomSrcPaths: Set[String] = Set.empty,
+  xomClasspath: Seq[String] = Seq.empty,
   rflSrcPaths: Set[String] = Set.empty,
   taskIdentityPaths: Set[String] = Set.empty,
   b2xPath: Option[String] = None,
@@ -29,6 +32,8 @@ final case class Config(
     copy(genericConfig = value)
 
   def withXomSrcPaths(paths: Set[String]): Config = copy(xomSrcPaths = paths)
+
+  def withXomClasspath(paths: Seq[String]): Config = copy(xomClasspath = paths)
 
   def withRflSrcPaths(paths: Set[String]): Config = copy(rflSrcPaths = paths)
 
@@ -51,6 +56,13 @@ private object Frontend {
         .text(
           "path to Java sources of the eXecution Object Model (XOM). Repeatable. The Java sources are " +
             "imported into the same CPG and ARL calls are linked against them."
+        ),
+      opt[String]("xom-classpath")
+        .unbounded()
+        .action((path, config) => config.withXomClasspath(config.xomClasspath :+ path))
+        .text(
+          "jar or classes directory containing XOM types used to resolve Java calls. Repeatable; paths are searched " +
+            "in command-line order after --xom-src types and before JDK types."
         ),
       opt[String]("rfl-src")
         .unbounded()
@@ -84,4 +96,7 @@ private object Frontend {
   }
 }
 
-object Main extends X2CpgMain(new Arl2Cpg(), cmdLineParser)
+object Main extends X2CpgMain(new Arl2Cpg(), cmdLineParser) {
+  private[arl2cpg] def parseConfig(args: Array[String]): Option[Config] =
+    OParser.parse(Frontend.cmdLineParser, args, Config())
+}
