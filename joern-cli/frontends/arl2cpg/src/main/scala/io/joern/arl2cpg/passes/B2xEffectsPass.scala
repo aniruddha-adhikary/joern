@@ -2,7 +2,7 @@ package io.joern.arl2cpg.passes
 
 import io.joern.arl2cpg.ArlFindings.{Codes, Reasons}
 import io.joern.arl2cpg.b2x.{B2xEffects, B2xMember, B2xModel}
-import io.joern.arl2cpg.{ArlFindings, ArlTags}
+import io.joern.arl2cpg.{ArlAnnotations, ArlFindings, ArlTags}
 import io.joern.x2cpg.Defines
 import io.shiftleft.codepropertygraph.generated.nodes.*
 import io.shiftleft.codepropertygraph.generated.{
@@ -169,16 +169,8 @@ class B2xEffectsPass(cpg: Cpg, b2x: Option[B2xModel]) extends CpgPass(cpg) {
             .typeFullName(tpe)
             .evaluationStrategy(EvaluationStrategies.BY_SHARING)
         }
-        val block      = NewBlock().code(member.body).typeFullName(Defines.Any).order(params.size + 1)
-        val annotation = NewAnnotation()
-          .name("arlKind")
-          .fullName("arlKind")
-          .code("arlKind: function")
-          .order(params.size + 2)
-        val assignment = NewAnnotationParameterAssign().code("function").order(1)
-        val parameter  = NewAnnotationParameter().code("value").order(1)
-        val literal    = NewAnnotationLiteral().name("function").code("function").order(2).argumentIndex(2)
-        val ret        = NewMethodReturn()
+        val block = NewBlock().code(member.body).typeFullName(Defines.Any).order(params.size + 1)
+        val ret   = NewMethodReturn()
           .code("RET")
           .typeFullName(Defines.Any)
           .evaluationStrategy(EvaluationStrategies.BY_VALUE)
@@ -190,14 +182,7 @@ class B2xEffectsPass(cpg: Cpg, b2x: Option[B2xModel]) extends CpgPass(cpg) {
         }
         builder.addNode(block)
         builder.addEdge(method, block, EdgeTypes.AST)
-        builder.addNode(annotation)
-        builder.addEdge(method, annotation, EdgeTypes.AST)
-        builder.addNode(assignment)
-        builder.addEdge(annotation, assignment, EdgeTypes.AST)
-        builder.addNode(parameter)
-        builder.addEdge(assignment, parameter, EdgeTypes.AST)
-        builder.addNode(literal)
-        builder.addEdge(assignment, literal, EdgeTypes.AST)
+        ArlAnnotations.addValue(builder, method, "arlKind", "function", params.size + 2)
         builder.addNode(ret)
         builder.addEdge(method, ret, EdgeTypes.AST)
         method

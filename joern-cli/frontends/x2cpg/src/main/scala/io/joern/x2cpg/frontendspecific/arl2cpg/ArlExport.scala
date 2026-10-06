@@ -2,6 +2,7 @@ package io.joern.x2cpg.frontendspecific.arl2cpg
 
 import io.shiftleft.codepropertygraph.generated.Cpg
 import io.shiftleft.codepropertygraph.generated.nodes.{AstNode, Call, CfgNode, ControlStructure, Method}
+import io.shiftleft.codepropertygraph.generated.neighboraccessors.Lang.*
 import io.shiftleft.semanticcpg.language.*
 
 import scala.collection.mutable
@@ -63,7 +64,10 @@ object ArlExport {
 
     node match {
       case cfgNode: CfgNode =>
-        fields += (("cfgOut", ujson.Arr.from(cfgNode.cfgNext.l.map(_.id).distinct.sorted.map(number))))
+        fields += ((
+          "cfgOut",
+          ujson.Arr.from(cfgNode._cfgOut.cast[CfgNode].map(_.id).toList.distinct.sorted.map(number))
+        ))
       case _ =>
     }
 

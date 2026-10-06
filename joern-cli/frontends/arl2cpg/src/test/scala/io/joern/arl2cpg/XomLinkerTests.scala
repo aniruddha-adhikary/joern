@@ -126,8 +126,13 @@ public class LoanUtil {
     }
 
     "annotate non-external Java methods with arlKind xom" in withXomCpg { cpg =>
+      X2Cpg.applyDefaultOverlays(cpg)
       val method = cpg.method.name("compute").head
       method.annotation.name("arlKind").parameterAssign.value.code.l shouldBe List("xom")
+      val bodyNodeIds = method.block.ast.l.map(_.id).toSet
+      method.methodReturn.cfgIn.l.exists(node =>
+        node.method.id == method.id && bodyNodeIds.contains(node.id)
+      ) shouldBe true
     }
   }
 }

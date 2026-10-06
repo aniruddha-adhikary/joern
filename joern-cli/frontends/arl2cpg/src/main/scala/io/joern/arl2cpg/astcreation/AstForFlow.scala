@@ -421,7 +421,13 @@ trait AstForFlow {
     val method = flowMethodNode(ctx, selName, signature = selSig, fullNameSuffix = selSig, uuidSuffix = selSuffix)
     val params = Seq(thisParamAst(ctx), Ast(varParam))
     val body   = blockAst(blockNode(ctx), blockChildrenAsts(ctx.block()))
-    val selAst = methodAst(method, params, body, methodReturnNode(ctx, "boolean"))
+    val selAst = methodAstWithAnnotations(
+      method,
+      params,
+      body,
+      methodReturnNode(ctx, "boolean"),
+      annotations = List(valueAnnotationAst(ctx, "arlKind", "function"))
+    )
     valueScope.pop()
     thisParam = outerThis
     val ref = Ast(methodRefNode(ctx, code(ctx), selFull, s"$selName:$selSig"))

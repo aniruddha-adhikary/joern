@@ -4,6 +4,7 @@ import io.joern.arl2cpg.testfixtures.Arl2CpgSuite
 import io.joern.x2cpg.X2Cpg
 import io.joern.x2cpg.frontendspecific.arl2cpg.ArlExport
 import io.shiftleft.codepropertygraph.generated.{Cpg, Operators}
+import io.shiftleft.codepropertygraph.generated.neighboraccessors.Lang.*
 import io.shiftleft.codepropertygraph.generated.nodes.{Block, Call, CfgNode, JumpTarget, Method}
 import io.shiftleft.semanticcpg.language.*
 import io.shiftleft.semanticcpg.utils.FileUtil
@@ -50,6 +51,33 @@ class ArlCfgExportTests extends Arl2CpgSuite() {
   private def successorCodes(node: CfgNode): Set[String] =
     node.cfgNext.l.map(_.code.trim).toSet
 
+  private def rawSuccessors(node: CfgNode): List[CfgNode] =
+    node._cfgOut.cast[CfgNode].toList
+
+  private def rawPredecessors(node: CfgNode): List[CfgNode] =
+    node._cfgIn.cast[CfgNode].toList
+
+  private def bodyEntryNodes(method: Method): List[CfgNode] = {
+    val bodyNodes = method.block.ast.l.collect { case node: CfgNode if node.method.id == method.id => node }
+    val bodyIds   = bodyNodes.map(_.id).toSet
+    bodyNodes.filter(node => rawPredecessors(node).forall(predecessor => !bodyIds.contains(predecessor.id)))
+  }
+
+  private def reachesMethodReturn(start: CfgNode, methodReturn: CfgNode): Boolean = {
+    var pending = List(start)
+    var visited = Set.empty[Long]
+    while (pending.nonEmpty) {
+      val current = pending.head
+      pending = pending.tail
+      if (current.id == methodReturn.id) return true
+      if (!visited.contains(current.id)) {
+        visited += current.id
+        pending = rawSuccessors(current) ::: pending
+      }
+    }
+    false
+  }
+
   "ARL CFG construction" should {
     "branch, fork, loop, subflow, select, priority, and modes according to their lowered flow order" in {
       withResourceCpg(cfgResources) { cpg =>
@@ -78,6 +106,9 @@ class ArlCfgExportTests extends Arl2CpgSuite() {
         val branchA    = taskCall(forkMethod, "probe forkjoin>branchA")
         val branchB    = taskCall(forkMethod, "probe forkjoin>branchB")
         successorCodes(fork).shouldBe(Set(branchA.code.trim, branchB.code.trim))
+        val forkReturn = forkMethod.methodReturn
+        rawSuccessors(branchA).map(_.id).toSet.should(contain(forkReturn.id))
+        rawSuccessors(branchB).map(_.id).toSet.should(contain(forkReturn.id))
         val loopMethod = methodIn(cpg, "probe loop", "loop")
         val goto       = loopMethod.controlStructure.l.find(_.code.trim == "goto label_0").get
         val jumpTarget = loopMethod.ast.l.collect { case target: JumpTarget if target.name == "label_0" => target }.head
@@ -91,8 +122,13 @@ class ArlCfgExportTests extends Arl2CpgSuite() {
         successorCodes(goto).shouldBe(Set(jumpTarget.code.trim))
         successorCodes(jumpTarget).shouldBe(Set(loopBody.code.trim))
         val loopIf      = loopMethod.controlStructure.l.find(_.code.trim.startsWith("if")).get
+        val loopReturn  = loopMethod.methodReturn
         val loopBump    = taskCall(loopMethod, "probe loop>bump")
         val loopCondCfg = (loopIf.condition.l ++ loopIf.condition.ast.l).collect { case node: CfgNode => node }
+        val loopConditionSuccessors = loopCondCfg.flatMap(rawSuccessors).map(_.id).toSet
+        loopConditionSuccessors.should(contain(goto.id))
+        loopConditionSuccessors.should(contain(labelBlock.id))
+        reachesMethodReturn(labelBlock, loopReturn).shouldBe(true)
         val loopTargets = loopCondCfg.flatMap(_.cfgNext.l).map(_.id).toSet
         loopTargets.should(contain(goto.id))
         loopTargets.should(contain(labelBlock.id))
@@ -155,6 +191,26 @@ class ArlCfgExportTests extends Arl2CpgSuite() {
         modeCalls.sliding(2).foreach {
           case Seq(previous, next) => previous.cfgNext.l.map(_.id).toSet.should(contain(next.id))
           case _                   =>
+        }
+      }
+    }
+
+    "reach METHOD_RETURN on normal completion for every bundled ARL method kind" in {
+      withResourceCpg(cfgResources) { cpg =>
+        val methods = cpg.method.l.filterNot(_.isExternal).filter(_.filename.endsWith(".arl"))
+        val kinds   = methods
+          .map(_.annotation.name("arlKind").parameterAssign.value.code.headOption.getOrElse("unknown"))
+          .toSet
+        kinds.shouldBe(Set("rule", "ruleflow", "flowtask", "functiontask", "ruletask", "function"))
+
+        methods.foreach { method =>
+          val methodReturn      = method.methodReturn
+          val bodyStarts        = bodyEntryNodes(method)
+          val starts            = if (bodyStarts.nonEmpty) bodyStarts else List(method)
+          val completesNormally = starts.exists(reachesMethodReturn(_, methodReturn))
+          withClue(s"${method.filename}: ${method.fullName} body should reach METHOD_RETURN: ") {
+            completesNormally.shouldBe(true)
+          }
         }
       }
     }
@@ -224,7 +280,15 @@ class ArlCfgExportTests extends Arl2CpgSuite() {
         val forkJson   = exportedMethod("probe forkjoin", "forkjoin")("nodes").arr
           .find(node => node("label").str == "BLOCK" && node("code").str == "fork")
           .get
-        forkJson("cfgOut").arr.map(_.num.toLong).toSet.shouldBe(forkNode.cfgNext.l.map(_.id).toSet)
+        forkJson("cfgOut").arr.map(_.num.toLong).toSet.shouldBe(rawSuccessors(forkNode).map(_.id).toSet)
+        val forkMethodReturn = forkMethod.methodReturn
+        List("probe forkjoin>branchA", "probe forkjoin>branchB").foreach { name =>
+          val branchCall = taskCall(forkMethod, name)
+          val branchJson = exportedMethod("probe forkjoin", "forkjoin")("nodes").arr
+            .find(_("id").num.toLong == branchCall.id)
+            .get
+          branchJson("cfgOut").arr.map(_.num.toLong).toSet.should(contain(forkMethodReturn.id))
+        }
 
         val loopMethod = methodIn(cpg, "probe loop", "loop")
         val jumpTarget = loopMethod.ast.l.collect { case target: JumpTarget if target.name == "label_0" => target }.head
@@ -233,19 +297,45 @@ class ArlCfgExportTests extends Arl2CpgSuite() {
         val gotoJson   =
           loopJson.find(node => node("label").str == "CONTROL_STRUCTURE" && node("code").str.trim == "goto label_0").get
         val jumpJson = loopJson.find(node => node("label").str == "JUMP_TARGET" && node("code").str == "label_0:").get
-        gotoJson("cfgOut").arr.map(_.num.toLong).toSet.shouldBe(goto.cfgNext.l.map(_.id).toSet)
-        jumpJson("cfgOut").arr.map(_.num.toLong).toSet.shouldBe(jumpTarget.cfgNext.l.map(_.id).toSet)
+        gotoJson("cfgOut").arr.map(_.num.toLong).toSet.shouldBe(rawSuccessors(goto).map(_.id).toSet)
+        jumpJson("cfgOut").arr.map(_.num.toLong).toSet.shouldBe(rawSuccessors(jumpTarget).map(_.id).toSet)
       }
     }
 
-    "annotate ARL methods and report only select predicates as unknown" in {
+    "export a CFG predecessor for every method return" in {
+      withResourceCpg(cfgResources) { cpg =>
+        ujson.read(ArlExport.toJson(cpg))("methods").arr.foreach { method =>
+          val nodes       = method("nodes").arr
+          val methodNames = method("fullName").str
+          val returns     = nodes.filter(_("label").str == "METHOD_RETURN")
+          withClue(s"$methodNames should have at least one METHOD_RETURN: ") {
+            returns.nonEmpty.shouldBe(true)
+          }
+          returns.foreach { methodReturn =>
+            val returnId       = methodReturn("id").num.toLong
+            val hasPredecessor =
+              nodes.exists(node => node.obj.get("cfgOut").exists(_.arr.exists(_.num.toLong == returnId)))
+            withClue(s"$methodNames METHOD_RETURN $returnId should have a CFG predecessor: ") {
+              hasPredecessor.shouldBe(true)
+            }
+          }
+        }
+      }
+    }
+
+    "annotate all bundled ARL methods without unknown kinds" in {
       withResourceCpg(cfgResources) { cpg =>
         val methods = cpg.method.l.filterNot(_.isExternal).filter(_.filename.endsWith(".arl"))
         val unknown = methods.filter(_.annotation.name("arlKind").l.isEmpty)
         info(
           s"Methods exported with arlKind=unknown: ${unknown.map(method => s"${method.filename}: ${method.fullName}").sorted.mkString(", ")}"
         )
-        unknown.forall(_.name.endsWith("$select")).shouldBe(true)
+        unknown.isEmpty.shouldBe(true)
+        methods
+          .filter(_.name.endsWith("$select"))
+          .map(_.annotation.name("arlKind").parameterAssign.value.code.head)
+          .toSet
+          .shouldBe(Set("function"))
 
         val branchMethods = methods.filter(_.name == "probe branch")
         branchMethods
