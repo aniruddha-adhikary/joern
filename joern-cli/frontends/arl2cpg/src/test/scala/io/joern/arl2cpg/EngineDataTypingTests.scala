@@ -1,6 +1,7 @@
 package io.joern.arl2cpg
 
 import io.joern.arl2cpg.ArlFindings.{Codes, Keys}
+import io.joern.x2cpg.frontendspecific.arl2cpg.ArlExport
 import io.shiftleft.codepropertygraph.generated.Cpg
 import io.shiftleft.codepropertygraph.generated.nodes.Call
 import io.shiftleft.semanticcpg.language.*
@@ -34,6 +35,13 @@ class EngineDataTypingTests extends AnyWordSpec with Matchers {
       try test(cpg)
       finally cpg.close()
     }
+
+  private def unresolvedFindingJson(cpg: Cpg, call: Call): ujson.Value =
+    ujson
+      .read(ArlExport.toJson(cpg, "engine-data.cpg"))("findings")
+      .arr
+      .find(_.obj.get(Keys.CallId).contains(ujson.Str(call.id.toString)))
+      .get
 
   private def unresolvedFinding(cpg: Cpg, call: Call) =
     ArlFindings
@@ -168,6 +176,11 @@ class EngineDataTypingTests extends AnyWordSpec with Matchers {
           |      <parameter type="java.math.BigDecimal"/>
           |      <body language="arl"><![CDATA[return this;]]></body>
           |    </method>
+          |    <method>
+          |      <name>divideInternal</name>
+          |      <parameter type="java.lang.Object"/>
+          |      <body language="arl"><![CDATA[return this;]]></body>
+          |    </method>
           |  </class>
           |</b2x:translation>
           |""".stripMargin
@@ -177,16 +190,21 @@ class EngineDataTypingTests extends AnyWordSpec with Matchers {
         val call    = cpg.call.nameExact("divideInternal").head
         val finding = unresolvedFinding(cpg, call).get
         ArlFindings.reason(finding) shouldBe "bom-only"
-        ArlFindings.value(finding, Keys.Candidates) shouldBe
+        val candidates = List(
+          "java.math.BigDecimal.divideInternal(java.lang.Object)",
           "java.math.BigDecimal.divideInternal(java.math.BigDecimal)"
+        ).sorted
+        ArlFindings.values(finding, Keys.Candidates) shouldBe candidates
         ArlFindings.value(finding, Keys.ReceiverType) shouldBe "java.math.BigDecimal"
+        unresolvedFindingJson(cpg, call)(Keys.Candidates).arr.map(_.str).toList shouldBe candidates
       }
       withCpg(sourceMap) { cpg =>
         val call    = cpg.call.nameExact("divideInternal").head
         val finding = unresolvedFinding(cpg, call).get
         ArlFindings.reason(finding) shouldBe "no-candidate"
-        ArlFindings.value(finding, Keys.Candidates) shouldBe ""
+        ArlFindings.values(finding, Keys.Candidates) shouldBe empty
         ArlFindings.value(finding, Keys.ReceiverType) shouldBe "java.math.BigDecimal"
+        unresolvedFindingJson(cpg, call)(Keys.Candidates).arr shouldBe empty
       }
     }
   }

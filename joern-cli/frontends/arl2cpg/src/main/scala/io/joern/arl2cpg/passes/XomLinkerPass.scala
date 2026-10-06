@@ -574,9 +574,7 @@ class XomLinkerPass(cpg: Cpg, xomClasspath: Seq[String] = Seq.empty, b2x: Option
           s"unable to resolve Java call '${call.code}' ($reason)",
           filename,
           call.lineNumber,
-          List(
-            Keys.CallId       -> call.id().toString,
-            Keys.Candidates   -> candidates.mkString(";"),
+          List(Keys.CallId -> call.id().toString) ++ candidates.map(candidate => Keys.Candidates -> candidate) ++ List(
             Keys.ReceiverType -> receiverTypeForFinding(call)
           )
         )
