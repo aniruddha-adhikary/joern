@@ -1,8 +1,10 @@
 package io.joern.arl2cpg.passes
 
-import io.joern.arl2cpg.ArlFindings.{Codes, Reasons}
+import io.joern.x2cpg.frontendspecific.arl2cpg.ArlFindings
+import io.joern.x2cpg.frontendspecific.arl2cpg.ArlFindings.{Codes, Reasons}
+import io.joern.arl2cpg.ArlAnnotations
 import io.joern.arl2cpg.b2x.{B2xEffects, B2xMember, B2xModel}
-import io.joern.arl2cpg.{ArlAnnotations, ArlFindings, ArlTags}
+import io.joern.x2cpg.frontendspecific.arl2cpg.ArlTags
 import io.joern.x2cpg.Defines
 import io.shiftleft.codepropertygraph.generated.nodes.*
 import io.shiftleft.codepropertygraph.generated.{

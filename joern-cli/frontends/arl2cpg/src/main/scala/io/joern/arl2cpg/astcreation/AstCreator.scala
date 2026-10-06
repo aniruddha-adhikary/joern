@@ -1,10 +1,11 @@
 package io.joern.arl2cpg.astcreation
 
-import io.joern.arl2cpg.{ArlTags, Config}
+import io.joern.arl2cpg.Config
 import io.joern.arl2cpg.identity.TaskIdentityFile
 import io.joern.arl2cpg.parser.{ARLParser, ArlParseResult}
 import io.joern.arl2cpg.rfl.RuleflowMeta
 import io.joern.x2cpg.{Ast, AstCreatorBase, Defines, ValidationMode}
+import io.joern.x2cpg.frontendspecific.arl2cpg.ArlTags
 import io.shiftleft.codepropertygraph.generated.nodes.*
 import io.shiftleft.codepropertygraph.generated.{
   DiffGraphBuilder,
