@@ -264,7 +264,7 @@ class ArlCfgExportTests extends Arl2CpgSuite() {
 
     "export the parallel fork and label/goto CFG successor ids" in {
       withResourceCpg(Seq("forkjoin", "loop")) { cpg =>
-        val json                                       = ujson.read(ArlExport.toJson(cpg))
+        val json                                       = ujson.read(ArlExport.toJson(cpg, "arl-export.cpg"))
         val methods                                    = json("methods").arr
         def exportedMethod(name: String, file: String) =
           methods
@@ -304,7 +304,7 @@ class ArlCfgExportTests extends Arl2CpgSuite() {
 
     "export a CFG predecessor for every method return" in {
       withResourceCpg(cfgResources) { cpg =>
-        ujson.read(ArlExport.toJson(cpg))("methods").arr.foreach { method =>
+        ujson.read(ArlExport.toJson(cpg, "arl-export.cpg"))("methods").arr.foreach { method =>
           val nodes       = method("nodes").arr
           val methodNames = method("fullName").str
           val returns     = nodes.filter(_("label").str == "METHOD_RETURN")
@@ -338,7 +338,7 @@ class ArlCfgExportTests extends Arl2CpgSuite() {
         |""".stripMargin
       val cpg = code(source)
       try {
-        val nodes    = ujson.read(ArlExport.toJson(cpg))("methods").arr.flatMap(_("nodes").arr)
+        val nodes    = ujson.read(ArlExport.toJson(cpg, "arl-export.cpg"))("methods").arr.flatMap(_("nodes").arr)
         val interval = nodes
           .find(node => node("label").str == "CALL" && node("code").str == "[0,1[")
           .get
@@ -396,13 +396,16 @@ class ArlCfgExportTests extends Arl2CpgSuite() {
           .toSet
           .should(contain("rule"))
 
-        val root = ujson.read(ArlExport.toJson(cpg))
-        root.obj.keys.toList.shouldBe(List("methods"))
+        val root = ujson.read(ArlExport.toJson(cpg, "arl-export.cpg"))
+        root.obj.keys.toList.shouldBe(List("cpgFile", "methods", "types", "findings"))
+        root("cpgFile").str.shouldBe("arl-export.cpg")
         root("methods").arr.foreach(method => method.obj.keys.toList.should(contain("arlKind")))
         val exportedUnknown = root("methods").arr.filter(_("arlKind").str == "unknown").map(_("fullName").str).sorted
         exportedUnknown.shouldBe(unknown.map(_.fullName).sorted)
         val methodKeyOrder = root("methods").arr.head.obj.keys.toList
-        methodKeyOrder.shouldBe(List("id", "name", "fullName", "signature", "filename", "line", "arlKind", "nodes"))
+        methodKeyOrder.shouldBe(
+          List("id", "name", "fullName", "signature", "filename", "line", "lineEnd", "arlKind", "nodes")
+        )
         val methodSortKeys = root("methods").arr.map(method => (method("fullName").str, method("id").num.toLong)).toList
         methodSortKeys.shouldBe(methodSortKeys.sorted)
       }
@@ -420,7 +423,7 @@ class ArlCfgExportTests extends Arl2CpgSuite() {
         |""".stripMargin
       val cpg = code(source)
       X2Cpg.applyDefaultOverlays(cpg)
-      val root   = ujson.read(ArlExport.toJson(cpg))
+      val root   = ujson.read(ArlExport.toJson(cpg, "arl-export.cpg"))
       val method = root("methods").arr.find(_("name").str == "f").get
       val nodes  = method("nodes").arr
       val byId   = nodes.map(node => node("id").num.toLong -> node).toMap
@@ -433,7 +436,17 @@ class ArlCfgExportTests extends Arl2CpgSuite() {
       val condition   = byId(conditionId)
       condition("label").str.shouldBe("CALL")
       condition("name").str.shouldBe(Operators.logicalAnd)
-      condition("arguments").arr.map(id => byId(id.num.toLong)("code").str).toList.shouldBe(List("a.hasNext()", "b"))
+      condition("arguments").arr
+        .map(argument => byId(argument("id").num.toLong)("code").str)
+        .toList
+        .shouldBe(List("a.hasNext()", "b"))
+      condition("arguments").arr.map(_("index").num.toInt).toList.shouldBe(List(1, 2))
+      condition("callees").arr.foreach { callee =>
+        callee.obj.keys.toList.shouldBe(List("id", "fullName", "external"))
+        callee("id").num.toLong
+        callee("fullName").str
+        callee("external").bool
+      }
       condition.obj.keys.toList.shouldBe(
         List(
           "id",
@@ -484,7 +497,7 @@ class ArlCfgExportTests extends Arl2CpgSuite() {
           val cpg = new Arl2Cpg().createCpg(Config().withInputPath(dir.toString)).get
           try {
             X2Cpg.applyDefaultOverlays(cpg)
-            ArlExport.toJson(cpg)
+            ArlExport.toJson(cpg, "deterministic.cpg")
           } finally {
             cpg.close()
           }

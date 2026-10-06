@@ -10,5 +10,9 @@ import java.nio.file.Path
     throw new IllegalArgumentException(s"Unable to import CPG from $cpgFile")
   }
   X2Cpg.applyDefaultOverlays(cpg)
-  Files.writeString(Path.of(outFile), ArlExport.toJson(cpg), StandardCharsets.UTF_8)
+  Files.writeString(
+    Path.of(outFile),
+    ArlExport.toJson(cpg, Path.of(cpgFile).getFileName.toString),
+    StandardCharsets.UTF_8
+  )
 }
