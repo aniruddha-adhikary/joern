@@ -19,6 +19,7 @@ case class RuleflowMeta(
   name: String,
   uuid: String,
   taskIds: Set[String],
+  subflowTaskIds: Set[String],
   subflowTargets: Map[String, String], // taskId -> target flow uuid
   path: String
 )
@@ -61,16 +62,18 @@ object RflMetadata {
       val name           = firstChildText(doc, "name").getOrElse("")
       val uuid           = firstChildText(doc, "uuid").getOrElse("")
       val taskIds        = mutable.Set.empty[String]
+      val subflowTaskIds = mutable.Set.empty[String]
       val subflowTargets = mutable.Map.empty[String, String]
       taskElements(doc).foreach { elem =>
         Option(elem.getAttribute("Identifier")).filter(_.nonEmpty).foreach { id =>
           taskIds += id
           if (elem.getTagName == "SubflowTask") {
+            subflowTaskIds += id
             Option(elem.getAttribute("Uuid")).filter(_.nonEmpty).foreach(target => subflowTargets(id) = target)
           }
         }
       }
-      RuleflowMeta(name, uuid, taskIds.toSet, subflowTargets.toMap, path.toString)
+      RuleflowMeta(name, uuid, taskIds.toSet, subflowTaskIds.toSet, subflowTargets.toMap, path.toString)
     } match {
       case scala.util.Success(meta)      => Option(meta)
       case scala.util.Failure(exception) =>
