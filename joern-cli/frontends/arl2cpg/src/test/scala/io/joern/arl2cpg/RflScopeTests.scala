@@ -7,6 +7,7 @@ import io.shiftleft.codepropertygraph.generated.nodes.Method
 import io.shiftleft.semanticcpg.language.*
 
 import java.nio.file.{Files, Path}
+import scala.util.{Failure, Success}
 
 class RflScopeTests extends Arl2CpgSuite {
 
@@ -85,6 +86,49 @@ $tasks
     )
     root
   }
+
+  private def writeRflFiles(entries: (String, String)*): Path = {
+    val dir = Files.createTempDirectory("arl2cpg-rfl-tree")
+    entries.foreach { case (fileName, content) =>
+      val path = dir.resolve(fileName)
+      Files.createDirectories(path.getParent)
+      Files.writeString(path, content)
+    }
+    dir
+  }
+
+  private def rflWithTasks(flowName: String, uuid: String, taskElements: String): String =
+    s"""<?xml version="1.0" encoding="UTF-8"?>
+       |<RflRuleflow>
+       |  <name>$flowName</name>
+       |  <uuid>$uuid</uuid>
+       |  <rfModel><Ruleflow><Body>
+       |    <TaskList>
+       |$taskElements
+       |    </TaskList>
+       |  </Body></Ruleflow></rfModel>
+       |</RflRuleflow>
+       |""".stripMargin
+
+  private def rflFailure(path: Path): Throwable = {
+    val srcDir = Files.createTempDirectory("arl2cpg-rfl-error-src")
+    Files.writeString(srcDir.resolve("test.arl"), flowNameArl(List("", "")))
+    val result = new Arl2Cpg().createCpg(
+      Config().withInputPath(srcDir.toString).withRflSrcPaths(Set(path.toString))
+    )
+    result match {
+      case Failure(exception) => exception
+      case Success(cpg)       =>
+        cpg.close()
+        fail(s"Expected --rfl-src path '$path' to fail")
+    }
+  }
+
+  private def causeMessages(exception: Throwable): String =
+    Iterator.iterate(exception: Throwable)(_.getCause)
+      .takeWhile(_ != null)
+      .flatMap(error => Option(error.getMessage))
+      .mkString("\n")
 
   /** Builds a frontend CPG directly (no default overlays / validation), so tests can inspect same-fullName methods and
     * unresolved calls without call-linker stubs or the post-frontend validator interfering.
@@ -236,6 +280,49 @@ ruletask Amended (ctx) { ordering: natural; rules : r.*; }
       assertScopes(List(longBody, shortBody), List(uuid2, uuid1), List(true, false))
     }
 
+    "load the same ruleflow metadata through a symlinked --rfl-src root" in {
+      val subflowMetadata = writeRflFiles(
+        (
+          "amend/Flow.rfl",
+          rflWithTasks(
+            "Flow",
+            uuid1,
+            """<RuleTask Identifier="computation"/>
+              |<RuleTask Identifier="GET_NEXT_ITEM"/>""".stripMargin
+          )
+        ),
+        (
+          "main/Flow.rfl",
+          rflWithTasks(
+            "Flow",
+            uuid2,
+            """<RuleTask Identifier="computation"/>
+              |<RuleTask Identifier="check"/>""".stripMargin
+          )
+        ),
+        (
+          "amend/Main.rfl",
+          rflWithTasks("Main", "44444444-4444-4444-4444-444444444444", s"""<SubflowTask Identifier="Flow" Uuid="$uuid1"/>""")
+        ),
+        (
+          "main/Main.rfl",
+          rflWithTasks("Main", "55555555-5555-5555-5555-555555555555", s"""<SubflowTask Identifier="Flow" Uuid="$uuid2"/>""")
+        )
+      )
+      val symlinkRoot = Files.createTempDirectory("arl2cpg-rfl-symlink").resolve("rfl-link")
+      Files.createSymbolicLink(symlinkRoot, subflowMetadata)
+
+      def scopes(rflRoot: Path): List[(String, String)] = {
+        val cpg = arlCpg(flowNameArl(List(shortBody, longBody)), Some(rflRoot))
+        try cpg.method.nameExact("Flow").l.sortBy(_.lineNumber).map(method => method.fullName -> scopeOf(method))
+        finally cpg.close()
+      }
+
+      val realScopes = scopes(subflowMetadata)
+      realScopes.map(_._2).forall(_ != "unknown").shouldBe(true)
+      scopes(symlinkRoot).shouldBe(realScopes)
+    }
+
     "leave non-contained name-matched calls unscoped without blocking a unique match" in {
       val onlyComputation = writeRfls(("flow.rfl", "Flow", uuid1, List("computation")))
       val cpg             =
@@ -304,6 +391,22 @@ ruletask Amended (ctx) { ordering: natural; rules : r.*; }
 
       assertScopes(List(shortBody, mainBody), List(uuid1, uuid2))
       assertScopes(List(mainBody, shortBody), List(uuid2, uuid1))
+    }
+  }
+
+  "--rfl-src inputs" should {
+    "fail on empty, missing and malformed inputs with their option and path" in {
+      val emptyDirectory = Files.createTempDirectory("arl2cpg-rfl-empty")
+      val missingPath    = emptyDirectory.resolveSibling(s"${emptyDirectory.getFileName}-missing")
+      val malformedDir   = Files.createTempDirectory("arl2cpg-rfl-malformed")
+      val malformedPath  = malformedDir.resolve("malformed.rfl")
+      Files.writeString(malformedPath, "<RflRuleflow>")
+
+      List(emptyDirectory, missingPath, malformedDir).foreach { path =>
+        val error = causeMessages(rflFailure(path))
+        error should include("--rfl-src")
+        error should include(path.toString)
+      }
     }
   }
 
