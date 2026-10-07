@@ -91,6 +91,9 @@ class AstCreator(
   /** Task visible names declared more than once in this file (the ODM twin-flow shape). */
   protected var duplicateTaskNames: Set[String] = Set.empty
 
+  /** Precomputed `.rfl` scopes for duplicate task declarations, keyed by their source start-token index. */
+  protected var duplicateTaskScopesByTokenIndex: Map[Int, Option[RuleflowMeta]] = Map.empty
+
   /** Ruleflow metadata that scopes the task currently being lowered, if uniquely resolved. */
   protected var currentTaskScope: Option[RuleflowMeta] = None
 
