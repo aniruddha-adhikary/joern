@@ -6,6 +6,7 @@ import io.joern.arl2cpg.passes.{
   AstCreationPass,
   B2xEffectsPass,
   FindingsPass,
+  MissingTypeNodePass,
   ParseDiagnostics,
   XomLinkerPass,
   XomMethodKindPass,
@@ -17,7 +18,7 @@ import io.joern.x2cpg.SourceFiles
 import io.joern.x2cpg.X2Cpg.withNewEmptyCpg
 import io.joern.x2cpg.X2CpgFrontend
 import io.joern.x2cpg.frontendspecific.arl2cpg.{FileExtensions, Language}
-import io.joern.x2cpg.passes.frontend.{MetaDataPass, TypeNodePass}
+import io.joern.x2cpg.passes.frontend.MetaDataPass
 import io.shiftleft.codepropertygraph.generated.Cpg
 import org.slf4j.LoggerFactory
 
@@ -53,7 +54,7 @@ class Arl2Cpg extends X2CpgFrontend {
       if (config.xomSrcPaths.nonEmpty) {
         new XomMethodKindPass(cpg).createAndApply()
       }
-      TypeNodePass.withTypesFromCpg(cpg).createAndApply()
+      new MissingTypeNodePass(cpg, None).createAndApply()
       if (
         config.xomSrcPaths.nonEmpty || config.xomClasspath.nonEmpty || config.bomPaths.nonEmpty || config.bomRoots.nonEmpty
       ) {
@@ -62,7 +63,7 @@ class Arl2Cpg extends X2CpgFrontend {
       if (config.xomSrcPaths.nonEmpty) {
         new XomUnresolvedCallsPass(cpg).createAndApply()
       }
-      new B2xEffectsPass(cpg, b2x).createAndApply()
+      new B2xEffectsPass(cpg, b2x, config.xomClasspath, bom).createAndApply()
       new FindingsPass(cpg, diagnostics, config.allowUnknown).createAndApply()
     }
   }
@@ -89,7 +90,7 @@ class Arl2Cpg extends X2CpgFrontend {
       astCreationPass.clearJavaParserCaches()
       astCreationPass.closeTypeSolvers()
       new OuterClassRefPass(cpg).createAndApply()
-      TypeNodePass.withRegisteredTypes(astCreationPass.usedTypes(), cpg).createAndApply()
+      new MissingTypeNodePass(cpg, Some(astCreationPass.usedTypes())).createAndApply()
       new TypeInferencePass(cpg).createAndApply()
     } match {
       case scala.util.Failure(exception) =>

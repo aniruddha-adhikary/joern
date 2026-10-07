@@ -9,13 +9,15 @@ import scala.collection.mutable
 import scala.jdk.CollectionConverters.*
 
 /** A member of the BOM-to-XOM mapping that carries a body: a `method`, a `constructor`, or an attribute `getter` /
-  * `setter` (`kind`). `paramTypes` are the declared parameter types, in order; `body` is the verbatim text.
+  * `setter` (`kind`). `paramTypes` are the declared parameter types, in order; `returnType` is the declared result type
+  * when present; `body` is the verbatim text.
   */
 final case class B2xMember(
   businessClass: String,
   kind: String,
   name: String,
   paramTypes: List[String],
+  returnType: Option[String],
   language: String,
   body: String
 ) {
@@ -118,22 +120,42 @@ object B2xModel {
       name match {
         case None             => unhandled += B2xUnhandled(s"$kind-without-name", excerpt(member))
         case Some(memberName) =>
-          val params = mutable.ListBuffer.empty[String]
-          var body   = Option.empty[Element]
+          val params      = mutable.ListBuffer.empty[String]
+          val returnTypes = mutable.ListBuffer.empty[Element]
+          var body        = Option.empty[Element]
           elements(member).foreach { child =>
             localName(child) match {
               case tag if !MemberChildren.contains(tag) => unhandled += B2xUnhandled(s"$kind/$tag", excerpt(child))
               case "parameter"                          => params += child.getAttribute("type")
+              case "returnType"                         => returnTypes += child
               case "body"                               => body = Some(child)
               case _                                    =>
             }
           }
+          if (returnTypes.size > 1) {
+            returnTypes
+              .drop(1)
+              .foreach(child => unhandled += B2xUnhandled(s"$kind/returnType-duplicate", excerpt(child)))
+          }
+          val parsedReturnTypes = returnTypes.map { child =>
+            val text  = child.getTextContent.trim
+            val value = if (text.nonEmpty) text else child.getAttribute("type").trim
+            if (value.nonEmpty) Some(value)
+            else {
+              unhandled += B2xUnhandled(s"$kind/returnType-empty", excerpt(child))
+              None
+            }
+          }
+          val returnType =
+            if (returnTypes.size == 1) parsedReturnTypes.headOption.flatten
+            else None
           body.foreach { b =>
             members += B2xMember(
               businessClass,
               kind,
               memberName,
               params.toList,
+              returnType,
               b.getAttribute("language"),
               b.getTextContent.trim
             )
@@ -155,6 +177,7 @@ object B2xModel {
                   tag,
                   name,
                   Nil,
+                  None,
                   child.getAttribute("language"),
                   child.getTextContent.trim
                 )
