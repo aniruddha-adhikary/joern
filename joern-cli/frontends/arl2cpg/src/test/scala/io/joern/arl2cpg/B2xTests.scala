@@ -54,8 +54,7 @@ class B2xTests extends AnyWordSpec with Matchers with BeforeAndAfterAll {
   private def buildWithMapping(
     arl: String,
     mapping: String,
-    config: Config => Config = (config: Config) => config,
-    validateCpg: Boolean = true
+    config: Config => Config = (config: Config) => config
   ): (Cpg, Path) = {
     val dir = Files.createTempDirectory("arl2cpg-b2x-signature")
     tmpDirs ::= dir
@@ -64,7 +63,7 @@ class B2xTests extends AnyWordSpec with Matchers with BeforeAndAfterAll {
     Files.writeString(b2xPath, mapping)
     val base = Config().withInputPath(dir.toString).withB2xPath(b2xPath.toString)
     val cpg  = new Arl2Cpg().createCpg(config(base)).get
-    if (validateCpg) PostFrontendValidator(cpg, ValidationLevel.V3).run()
+    PostFrontendValidator(cpg, ValidationLevel.V3).run()
     (cpg, b2xPath)
   }
 
@@ -237,8 +236,7 @@ class B2xTests extends AnyWordSpec with Matchers with BeforeAndAfterAll {
           |  </method>
           |</class></translation>
           |""".stripMargin
-      val (cpg, b2xPath) =
-        buildWithMapping(arl, mapping, _.withXomSrcPaths(Set(xomDir.toString)), validateCpg = false)
+      val (cpg, b2xPath) = buildWithMapping(arl, mapping, _.withXomSrcPaths(Set(xomDir.toString)))
       try {
         val fullName = "com.acme.money.Amount.divideInternal:com.acme.money.Amount(com.acme.money.Amount)"
         val method   = cpg.method.fullNameExact(fullName).head

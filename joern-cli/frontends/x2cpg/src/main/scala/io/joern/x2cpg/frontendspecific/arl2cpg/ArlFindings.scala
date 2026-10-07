@@ -53,7 +53,8 @@ object ArlFindings {
     val B2xReturnTypeUnknown = "b2x-return-type-unknown"
     val B2xShadowsMethod     = "b2x-shadows-method"
 
-    /** A Java call whose target could not be chosen from the receiver and static argument types, including XOM bodies. */
+    /** A Java call whose target could not be chosen from the receiver and static argument types, including XOM bodies.
+      */
     val UnresolvedCallTarget = "unresolved-call-target"
 
     val BomMember         = "bom-member"
@@ -78,9 +79,9 @@ object ArlFindings {
 
   /** Severity mapping: `unknown-construct` and `syntax-error` are `error`; every `unresolved-call-target` (including
     * reason `xom-body`), `bom-type-unresolved`, `bom-duplicate-class`, `bom-include-missing`, `b2x-unmodelled-element`,
-    * `b2x-return-type-unknown`, and `b2x-shadows-method` are `unresolved`; `unresolved-call-effects` is `info` only
-    * for `callee-body-not-in-artifact` and `unresolved` otherwise; `b2x-member`, `bom-member`, and
-    * `bom-files-not-loaded` are `info`. An unknown code fails instead of receiving a default.
+    * `b2x-return-type-unknown`, and `b2x-shadows-method` are `unresolved`; `unresolved-call-effects` is `info` only for
+    * `callee-body-not-in-artifact` and `unresolved` otherwise; `b2x-member`, `bom-member`, and `bom-files-not-loaded`
+    * are `info`. An unknown code fails instead of receiving a default.
     */
   private[arl2cpg] def severity(code: String, reason: String): String = (code, reason) match {
     case (Codes.UnknownConstruct | Codes.SyntaxError, _)                                  => "error"
