@@ -7,6 +7,7 @@ bomFile
 bomItem
     : includeDecl
     | packageDecl
+    | propertyDecl
     | typeDecl
     ;
 

@@ -92,7 +92,7 @@ final case class BomTypeDecl(
   def allTypes: List[BomTypeDecl] = this :: nestedTypes.flatMap(_.allTypes)
 }
 
-final case class BomFile(path: String, includes: List[String], types: List[BomTypeDecl])
+final case class BomFile(path: String, includes: List[String], properties: List[BomProperty], types: List[BomTypeDecl])
 
 final case class BomTypeSource(file: String, declaration: BomTypeDecl)
 
@@ -157,16 +157,18 @@ object BomParserFacade {
 private object BomModelBuilder {
 
   def build(filename: String, tree: BomParser.BomFileContext): BomFile = {
-    val includes = mutable.ListBuffer.empty[String]
-    val types    = mutable.ListBuffer.empty[BomTypeDecl]
-    var pkg      = ""
+    val includes   = mutable.ListBuffer.empty[String]
+    val properties = mutable.ListBuffer.empty[BomProperty]
+    val types      = mutable.ListBuffer.empty[BomTypeDecl]
+    var pkg        = ""
 
     tree.bomItem().asScala.foreach { item =>
       if (item.includeDecl() != null) includes += decodeString(item.includeDecl().stringLiteral().getText)
       else if (item.packageDecl() != null) pkg = qualifiedName(item.packageDecl().qualifiedName())
+      else if (item.propertyDecl() != null) properties += property(item.propertyDecl())
       else if (item.typeDecl() != null) types += typeDecl(item.typeDecl(), pkg, None)
     }
-    BomFile(filename, includes.toList, types.toList)
+    BomFile(filename, includes.toList, properties.toList, types.toList)
   }
 
   private def typeDecl(ctx: BomParser.TypeDeclContext, pkg: String, enclosingName: Option[String]): BomTypeDecl =
