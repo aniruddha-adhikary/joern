@@ -80,8 +80,8 @@ object ArlFindings {
     val B2xBodyCallsMethodWithoutBody = "b2x-body-calls-method-without-body"
   }
 
-  /** Severity mapping: `unknown-construct` and `syntax-error` are `error`; `unresolved-call-target`, reason
-    * `xom-body`), `bom-type-unresolved`, `bom-duplicate-class`, `bom-include-missing`, `b2x-unmodelled-element`,
+  /** Severity mapping: `unknown-construct` and `syntax-error` are `error`; every `unresolved-call-target` (including
+    * reason `xom-body`), `bom-type-unresolved`, `bom-duplicate-class`, `bom-include-missing`, `b2x-unmodelled-element`,
     * `b2x-return-type-unknown`, `b2x-shadows-method`, `xom-field-unmatched`, and `xom-source-unparsed` are
     * `unresolved`; `unresolved-call-effects` is `info` only for `callee-body-not-in-artifact` and `unresolved`
     * otherwise; `b2x-member`, `bom-member`, and `bom-files-not-loaded` are `info`. An unknown code fails instead of
