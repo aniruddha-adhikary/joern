@@ -2,6 +2,7 @@ package io.joern.x2cpg.frontendspecific.arl2cpg
 
 import io.joern.x2cpg.frontendspecific.arl2cpg.ArlFindings
 import io.joern.x2cpg.frontendspecific.arl2cpg.ArlFindings.{Codes, Keys}
+import io.joern.x2cpg.frontendspecific.arl2cpg.ArlTags
 import io.shiftleft.codepropertygraph.generated.Cpg
 import io.shiftleft.codepropertygraph.generated.nodes.{
   AstNode,
@@ -26,15 +27,19 @@ import java.nio.file.Paths
 import java.security.MessageDigest
 import scala.collection.mutable
 
-/** Deterministic export contract: the root has `cpgFile` (filename only), `methods`, `types`, and `findings`. Methods
-  * are sorted by `(fullName, id)` and contain `id`, `stableId`, `stableKey`, `name`, `fullName`, `signature`,
-  * `filename`, `line`, `lineEnd`, `arlKind`, and `nodes` (sorted by id); types are sorted by `(fullName, id)` and
-  * contain `id`, `stableId`, `name`, `fullName`, `file`, sorted `inherits`, and `members` sorted by `(name, id)` with
-  * `id`, `stableId`, `name`, `typeFullName`, `code`, and `line`; findings are sorted by node id and contain sorted
-  * key/value fields, with duplicate non-list-valued keys rejected. Every unresolved call in ARL and XOM method bodies
-  * has an `unresolved-call-target` finding. `candidates` is a sorted JSON array on ARL-side findings; XOM-body findings
-  * have reason `xom-body`. `bomFiles` is a JSON array on `bom-files-not-loaded` findings. Findings with `callId` also
-  * contain the referenced call's `callStableId`.
+/** Deterministic export contract: the root has `cpgFile` (filename only), `methods`, `types`, `b2xAttributes`, and
+  * `findings`. Methods are sorted by `(fullName, id)` and contain `id`, `stableId`, `stableKey`, `name`, `fullName`,
+  * `signature`, `filename`, `line`, `lineEnd`, the METHOD's `arlKind`, and `nodes` (sorted by id). B2X attributes are
+  * identified by the `ARL_B2X_ATTRIBUTE` tag; a reused Java METHOD keeps its original `arlKind`. Types are sorted by
+  * `(fullName, id)` and contain `id`, `stableId`, `name`, `fullName`, `file`, sorted `inherits`, and `members` sorted
+  * by `(name, id)` with `id`, `stableId`, `name`, `typeFullName`, `code`, `line`, and an optional `initializer` object
+  * with `code`, `kind`, and optional `value`. `b2xAttributes` is sorted by `(astParentFullName, name, id)` and contains
+  * `class`, `name`, `type`, `methodStableId`, `shadowsMethod` (true when the tagged METHOD's `arlKind` is not
+  * `b2x-attribute`), and an optional `literal` object with `kind` and optional `value`. Findings are sorted by node id
+  * and contain sorted key/value fields, with duplicate non-list-valued keys rejected. Every unresolved call in ARL and
+  * XOM method bodies has an `unresolved-call-target` finding. `candidates` is a sorted JSON array on ARL-side findings;
+  * XOM-body findings have reason `xom-body`. `bomFiles` is a JSON array on `bom-files-not-loaded` findings. Findings
+  * with `callId` also contain the referenced call's `callStableId`.
   *
   * Every node has `id`, `stableId`, `label`, `order`, `code`, `line`, `columnNumber`, and AST-child ids sorted by
   * `(order, id)`; CFG nodes add sorted `cfgOut`. CALL adds `name`, `methodFullName`, `signature`, `typeFullName`,
@@ -61,21 +66,26 @@ object ArlExport {
   private val UpperClosedTag = "ARL_INTERVAL_UPPER_CLOSED"
 
   def toJson(cpg: Cpg, cpgFile: String): String = {
-    val methods        = cpg.method.l.filterNot(_.isExternal).sortBy(method => (method.fullName, method.id))
-    val types          = cpg.typeDecl.isExternal(false).l.sortBy(typeDecl => (typeDecl.fullName, typeDecl.id))
-    val findings       = cpg.finding.l.sortBy(_.id)
-    val twinOrdinals   = methodTwinOrdinals(cpg, methods)
-    val stableIds      = new StableIdRegistry
-    val methodObjects  = methods.map(method => methodJson(cpg, method, stableIds, twinOrdinals))
-    val typeObjects    = types.map(typeDecl => typeDeclJson(cpg, typeDecl, stableIds))
-    val stableIdByNode = stableIds.byNodeIdStableId
+    val methods             = cpg.method.l.filterNot(_.isExternal).sortBy(method => (method.fullName, method.id))
+    val types               = cpg.typeDecl.isExternal(false).l.sortBy(typeDecl => (typeDecl.fullName, typeDecl.id))
+    val findings            = cpg.finding.l.sortBy(_.id)
+    val twinOrdinals        = methodTwinOrdinals(cpg, methods)
+    val stableIds           = new StableIdRegistry
+    val methodObjects       = methods.map(method => methodJson(cpg, method, stableIds, twinOrdinals))
+    val typeObjects         = types.map(typeDecl => typeDeclJson(cpg, typeDecl, stableIds))
+    val stableIdByNode      = stableIds.byNodeIdStableId
+    val b2xAttributeObjects = methods
+      .filter(method => method.tag.l.exists(_.name == ArlTags.B2xAttribute))
+      .sortBy(method => (method.astParentFullName, method.name, method.id))
+      .map(method => b2xAttributeJson(method, stableIdByNode))
     val findingObjects = findings.map(finding => findingJson(finding, stableIdByNode))
     val json           = ujson.Obj.from(
       Seq(
-        "cpgFile"  -> ujson.Str(cpgFile),
-        "methods"  -> ujson.Arr.from(methodObjects),
-        "types"    -> ujson.Arr.from(typeObjects),
-        "findings" -> ujson.Arr.from(findingObjects)
+        "cpgFile"       -> ujson.Str(cpgFile),
+        "methods"       -> ujson.Arr.from(methodObjects),
+        "types"         -> ujson.Arr.from(typeObjects),
+        "b2xAttributes" -> ujson.Arr.from(b2xAttributeObjects),
+        "findings"      -> ujson.Arr.from(findingObjects)
       )
     )
     ujson.write(json)
@@ -123,6 +133,42 @@ object ArlExport {
         "members"  -> ujson.Arr.from(members.map(member => memberJson(cpg, member, typeDecl, stableIds)))
       )
     )
+  }
+
+  private def b2xAttributeJson(method: Method, stableIdsByNodeId: Map[Long, String]): ujson.Obj = {
+    val kindValues  = method.tag.l.filter(_.name == ArlTags.LiteralKind).map(_.value).distinct.sorted
+    val valueValues = method.tag.l.filter(_.name == ArlTags.LiteralValue).map(_.value).distinct.sorted
+    if (kindValues.size > 1 || valueValues.size > 1) {
+      throw new IllegalStateException(
+        s"B2X attribute METHOD ${method.fullName} has conflicting literal tags: " +
+          s"kinds=${kindValues.mkString(",")}, values=${valueValues.mkString(",")}"
+      )
+    }
+    val literalFields = kindValues match {
+      case Nil if valueValues.nonEmpty =>
+        throw new IllegalStateException(s"B2X attribute METHOD ${method.fullName} has a literal value without a kind")
+      case Nil         => Nil
+      case kind :: Nil =>
+        val fields = List("kind" -> ujson.Str(kind))
+        fields ++ valueValues.headOption.map(value => "value" -> ujson.Str(value))
+      case _ => throw new IllegalStateException(s"B2X attribute METHOD ${method.fullName} has invalid literal tags")
+    }
+    val fields = List(
+      "class"          -> ujson.Str(method.astParentFullName),
+      "name"           -> ujson.Str(method.name),
+      "type"           -> ujson.Str(method.methodReturn.typeFullName),
+      "shadowsMethod"  -> ujson.Bool(arlKind(method) != "b2x-attribute"),
+      "methodStableId" -> ujson.Str(
+        stableIdsByNodeId.getOrElse(
+          method.id,
+          throw new IllegalStateException(s"B2X attribute METHOD ${method.id} has no exported stableId")
+        )
+      )
+    )
+    val withLiteral =
+      if (literalFields.isEmpty) fields
+      else fields :+ ("literal" -> ujson.Obj.from(literalFields))
+    ujson.Obj.from(withLiteral)
   }
 
   private def memberJson(cpg: Cpg, member: Member, typeDecl: TypeDecl, stableIds: StableIdRegistry): ujson.Obj =

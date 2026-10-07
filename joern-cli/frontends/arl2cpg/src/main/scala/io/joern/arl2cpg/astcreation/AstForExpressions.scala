@@ -509,20 +509,32 @@ trait AstForExpressions {
 
   private def astForLiteral(ctx: ARLParser.LiteralContext): Ast = {
     val text = ctx.getText
-    val tpe  =
-      if (Option(ctx.Integer()).isDefined) {
-        if (text.endsWith("l") || text.endsWith("L")) "long" else "int"
-      } else if (Option(ctx.FloatLit()).isDefined) {
-        if (text.endsWith("f") || text.endsWith("F")) "float" else "double"
-      } else if (Option(ctx.StringLit()).isDefined) {
-        "java.lang.String"
-      } else if (Option(ctx.CharLit()).isDefined) {
-        "char"
-      } else if (text == "true" || text == "false") {
-        "boolean"
-      } else {
-        Defines.Any // null
-      }
-    Ast(literalNode(ctx, text, tpe))
+    Ast(literalNode(ctx, text, AstForExpressions.literalType(ctx)))
   }
+}
+
+object AstForExpressions {
+  def literalType(ctx: ARLParser.LiteralContext): String = {
+    val text = ctx.getText
+    if (Option(ctx.Integer()).isDefined) {
+      if (text.endsWith("l") || text.endsWith("L")) "long" else "int"
+    } else if (Option(ctx.FloatLit()).isDefined) {
+      if (text.endsWith("f") || text.endsWith("F")) "float" else "double"
+    } else if (Option(ctx.StringLit()).isDefined) {
+      "java.lang.String"
+    } else if (Option(ctx.CharLit()).isDefined) {
+      "char"
+    } else if (text == "true" || text == "false") {
+      "boolean"
+    } else {
+      Defines.Any
+    }
+  }
+
+  def literalKind(ctx: ARLParser.LiteralContext): String =
+    literalType(ctx) match {
+      case "java.lang.String" => "string"
+      case Defines.Any        => "null"
+      case kind               => kind
+    }
 }
