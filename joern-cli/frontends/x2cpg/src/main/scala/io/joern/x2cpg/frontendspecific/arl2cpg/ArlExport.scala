@@ -30,7 +30,8 @@ import scala.collection.mutable
   * are sorted by `(fullName, id)` and contain `id`, `stableId`, `stableKey`, `name`, `fullName`, `signature`,
   * `filename`, `line`, `lineEnd`, `arlKind`, and `nodes` (sorted by id); types are sorted by `(fullName, id)` and
   * contain `id`, `stableId`, `name`, `fullName`, `file`, sorted `inherits`, and `members` sorted by `(name, id)` with
-  * `id`, `stableId`, `name`, `typeFullName`, `code`, and `line`; findings are sorted by node id and contain sorted
+  * `id`, `stableId`, `name`, `typeFullName`, `code`, and `line`; members with initializer tags additionally contain
+  * `initializer` with `code`, `kind`, and an optional `value`; findings are sorted by node id and contain sorted
   * key/value fields, with duplicate non-list-valued keys rejected. `candidates` is a sorted JSON array, always present
   * on `unresolved-call-target` findings; `bomFiles` is a JSON array on `bom-files-not-loaded` findings. Findings with
   * `callId` also contain the referenced call's `callStableId`.
@@ -133,8 +134,29 @@ object ArlExport {
         "typeFullName" -> ujson.Str(member.typeFullName),
         "code"         -> ujson.Str(member.code),
         "line"         -> optionalNumber(member.lineNumber)
-      )
+      ) ++ initializerJson(member)
     )
+
+  private def initializerJson(member: Member): Seq[(String, ujson.Value)] = {
+    val codeValues  = member.tag.nameExact(ArlTags.InitializerCode).value.l
+    val kindValues  = member.tag.nameExact(ArlTags.LiteralKind).value.l
+    val valueValues = member.tag.nameExact(ArlTags.LiteralValue).value.l
+    if (codeValues.isEmpty && kindValues.isEmpty && valueValues.isEmpty) {
+      Nil
+    } else {
+      if (codeValues.size != 1 || kindValues.size != 1 || valueValues.size > 1) {
+        throw new IllegalStateException(
+          s"Member ${member.id} has inconsistent initializer tags: " +
+            s"code=${codeValues.size}, kind=${kindValues.size}, value=${valueValues.size}"
+        )
+      }
+      val fields =
+        Seq("code" -> ujson.Str(codeValues.head), "kind" -> ujson.Str(kindValues.head)) ++ valueValues.headOption.map(
+          value => "value" -> ujson.Str(value)
+        )
+      Seq("initializer" -> ujson.Obj.from(fields))
+    }
+  }
 
   private def findingJson(finding: Finding, stableIdsByNodeId: Map[Long, String]): ujson.Obj = {
     val pairs         = finding.keyValuePairs.map(pair => pair.key -> pair.value).toList

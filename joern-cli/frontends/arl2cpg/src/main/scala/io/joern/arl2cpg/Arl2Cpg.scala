@@ -7,6 +7,7 @@ import io.joern.arl2cpg.passes.{
   B2xEffectsPass,
   FindingsPass,
   ParseDiagnostics,
+  XomFieldInitializerPass,
   XomLinkerPass,
   XomMethodKindPass
 }
@@ -49,6 +50,7 @@ class Arl2Cpg extends X2CpgFrontend {
       config.xomSrcPaths.toSeq.sorted.foreach(runJavasrcPasses(cpg, _))
       if (config.xomSrcPaths.nonEmpty) {
         new XomMethodKindPass(cpg).createAndApply()
+        new XomFieldInitializerPass(cpg, config.xomSrcPaths).createAndApply()
       }
       TypeNodePass.withTypesFromCpg(cpg).createAndApply()
       if (

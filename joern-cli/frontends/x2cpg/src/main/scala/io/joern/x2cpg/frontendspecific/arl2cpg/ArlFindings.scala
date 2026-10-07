@@ -52,6 +52,9 @@ object ArlFindings {
     /** A Java call whose target could not be chosen from the receiver and static argument types. */
     val UnresolvedCallTarget = "unresolved-call-target"
 
+    val XomFieldUnmatched = "xom-field-unmatched"
+    val XomSourceUnparsed = "xom-source-unparsed"
+
     val BomMember         = "bom-member"
     val BomTypeUnresolved = "bom-type-unresolved"
     val BomDuplicateClass = "bom-duplicate-class"
@@ -73,10 +76,10 @@ object ArlFindings {
   }
 
   /** Severity mapping: `unknown-construct` and `syntax-error` are `error`; `unresolved-call-target`,
-    * `bom-type-unresolved`, `bom-duplicate-class`, `bom-include-missing`, and `b2x-unmodelled-element` are
-    * `unresolved`; `unresolved-call-effects` is `info` only for `callee-body-not-in-artifact` and `unresolved`
-    * otherwise; `bom-member` and `bom-files-not-loaded` are `info`. An unknown code fails instead of receiving a
-    * default.
+    * `bom-type-unresolved`, `bom-duplicate-class`, `bom-include-missing`, `b2x-unmodelled-element`,
+    * `xom-field-unmatched`, and `xom-source-unparsed` are `unresolved`; `unresolved-call-effects` is `info` only for
+    * `callee-body-not-in-artifact` and `unresolved` otherwise; `bom-member` and `bom-files-not-loaded` are `info`. An
+    * unknown code fails instead of receiving a default.
     */
   private[arl2cpg] def severity(code: String, reason: String): String = (code, reason) match {
     case (Codes.UnknownConstruct | Codes.SyntaxError, _)                                  => "error"
@@ -84,6 +87,7 @@ object ArlFindings {
     case (Codes.UnresolvedCallEffects, Reasons.CalleeBodyNotInArtifact)                   => "info"
     case (Codes.UnresolvedCallEffects, _)                                                 => "unresolved"
     case (Codes.B2xUnmodelledElement, _)                                                  => "unresolved"
+    case (Codes.XomFieldUnmatched | Codes.XomSourceUnparsed, _)                           => "unresolved"
     case (Codes.BomMember, _)                                                             => "info"
     case (Codes.BomFilesNotLoaded, _)                                                     => "info"
     case (Codes.BomTypeUnresolved | Codes.BomDuplicateClass | Codes.BomIncludeMissing, _) =>
@@ -131,7 +135,7 @@ object ArlFindings {
     cpg.finding.filter(f => ArlFindings.code(f) == code).l
 }
 
-/** TAG names attached to ARL CALL nodes to record what a call does to its receiver, and how we know. */
+/** TAG names attached to ARL CALL, Java MEMBER, and B2X METHOD nodes to record derived metadata. */
 object ArlTags {
 
   /** value: fullName of the B2X body METHOD the call resolves to. */
@@ -157,6 +161,15 @@ object ArlTags {
 
   /** value: `true` when an interval literal's upper bound is closed (`]`), otherwise `false`. */
   val IntervalUpperClosed = "ARL_INTERVAL_UPPER_CLOSED"
+
+  /** value: the exact source text of a Java field initializer. */
+  val InitializerCode = "ARL_INITIALIZER_CODE"
+
+  /** value: the kind of a Java field or B2X attribute literal. */
+  val LiteralKind = "ARL_LITERAL_KIND"
+
+  /** value: the decoded value of a Java field or B2X attribute literal, when one exists. */
+  val LiteralValue = "ARL_LITERAL_VALUE"
 
   def tag(builder: DiffGraphBuilder, node: AbstractNode, name: String, value: String): NewTag = {
     val tag = NewTag().name(name).value(value)
