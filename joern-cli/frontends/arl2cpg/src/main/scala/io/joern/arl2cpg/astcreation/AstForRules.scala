@@ -27,16 +27,23 @@ trait AstForRules {
     allRuleNames = ruleDecls.map(rd => nameOf(rd.ruleName()))
 
     // Pre-pass over task declarations: names declared more than once need .rfl scoping to stay distinct.
-    val taskDeclNames = unit.flowElement().asScala.toList.flatMap { element =>
+    val taskDeclarations = unit.flowElement().asScala.toList.flatMap { element =>
       childrenOf(element).headOption match {
-        case Some(f: ARLParser.FlowtaskDeclContext)     => List(nameOf(f.flowId()))
-        case Some(r: ARLParser.RuletaskDeclContext)     => List(nameOf(r.flowId()))
-        case Some(f: ARLParser.FunctiontaskDeclContext) => List(nameOf(f.flowId()))
-        case _                                          => List.empty
+        case Some(f: ARLParser.FlowtaskDeclContext) =>
+          List((f: ParserRuleContext, nameOf(f.flowId())))
+        case Some(r: ARLParser.RuletaskDeclContext) =>
+          List((r: ParserRuleContext, nameOf(r.flowId())))
+        case Some(f: ARLParser.FunctiontaskDeclContext) =>
+          List((f: ParserRuleContext, nameOf(f.flowId())))
+        case _ => List.empty
       }
     }
-    duplicateTaskNames =
-      taskDeclNames.groupBy(identity).collect { case (name, occurrences) if occurrences.size > 1 => name }.toSet
+    duplicateTaskNames = taskDeclarations
+      .map(_._2)
+      .groupBy(identity)
+      .collect { case (name, occurrences) if occurrences.size > 1 => name }
+      .toSet
+    duplicateTaskScopesByTokenIndex = precomputeDuplicateTaskScopes(taskDeclarations)
 
     // Determine container TYPE_DECL: the ruleset name, or the file basename for bare-rule Designer files.
     val (containerName, containerFull) = Option(unit.rulesetDecl()) match {

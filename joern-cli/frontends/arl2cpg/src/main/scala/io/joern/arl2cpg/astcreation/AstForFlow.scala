@@ -214,6 +214,18 @@ trait AstForFlow {
     qualifiedScope(target).isDefined
   }
 
+  private def nameMatchedCallAcceptable(meta: RuleflowMeta, target: String): Boolean = {
+    val sep = target.lastIndexOf('>')
+    if (sep >= 0) {
+      target.take(sep).trim == meta.name && meta.taskIds.contains(taskIdOf(target))
+    } else {
+      val id = taskIdOf(target)
+      meta.taskIds.contains(id) || meta.subflowTargets.values.toList
+        .flatMap(targetUuid => rflMeta.find(subMeta => subMeta.uuid == targetUuid))
+        .exists(subMeta => subMeta.taskIds.contains(id) || subMeta.taskIds.contains(target))
+    }
+  }
+
   /** For a `F>X` target/declared name: the unique ruleflow named `F` (everything before the last `>`) that contains
     * `X`; None when `target` is unqualified or no unique match exists.
     */
@@ -229,20 +241,121 @@ trait AstForFlow {
     }
   }
 
-  /** Scope candidates for a task declaration: ruleflows whose task list contains its id (or full name), refined to
-    * those that also contain every `call task` target referenced in its body. Unique → scoped. A `flow>task` qualified
-    * name is only scoped to a ruleflow of that flow's name; it never falls back to bare-id matching.
+  /** Refined scope candidates for a task declaration. Task-list matches preserve the existing call-acceptance rule; a
+    * name-only match requires every call target to be present in that named ruleflow.
     */
-  private def taskScopeFor(name: String, calledTargets: Set[String]): Option[RuleflowMeta] = {
-    val id   = taskIdOf(name)
-    val byId =
-      if (name.contains('>')) {
-        qualifiedScope(name).toList
-      } else {
-        rflMeta.filter(meta => meta.taskIds.contains(id) || meta.taskIds.contains(name))
+  private def refinedTaskScopeCandidates(name: String, calledTargets: Set[String]): List[RuleflowMeta] =
+    if (name.contains('>')) {
+      qualifiedScope(name).toList.filter(meta => calledTargets.forall(target => callAcceptable(meta, target)))
+    } else {
+      val id              = taskIdOf(name)
+      val taskListMatches = rflMeta.filter(meta => meta.taskIds.contains(id) || meta.taskIds.contains(name))
+      val nameOnlyMatches = rflMeta.filter(meta =>
+        meta.name == name && !meta.taskIds.contains(id) && !meta.taskIds
+          .contains(name)
+      )
+      taskListMatches.filter(meta => calledTargets.forall(target => callAcceptable(meta, target))) ++
+        nameOnlyMatches.filter(meta => calledTargets.forall(target => nameMatchedCallAcceptable(meta, target)))
+    }
+
+  private def taskScopeFor(name: String, calledTargets: Set[String]): Option[RuleflowMeta] =
+    refinedTaskScopeCandidates(name, calledTargets) match {
+      case List(one) => Option(one)
+      case _         => None
+    }
+
+  private def taskIdentityFor(ctx: ParserRuleContext, name: String): Option[TaskIdentityRecord] =
+    taskIdentity.records.get(TaskIdentityKey(fileBasename, Option(ctx.getStart).map(_.getLine).getOrElse(-1), name))
+
+  private def taskDeclarationTokenIndex(ctx: ParserRuleContext, name: String): Int =
+    Option(ctx.getStart)
+      .map(_.getTokenIndex)
+      .filter(_ >= 0)
+      .getOrElse(throw new IllegalStateException(s"Task declaration '$name' has no start token index"))
+
+  protected def precomputeDuplicateTaskScopes(
+    declarations: List[(ParserRuleContext, String)]
+  ): Map[Int, Option[RuleflowMeta]] = {
+    val scopesByTokenIndex = mutable.Map.empty[Int, Option[RuleflowMeta]]
+    declarations
+      .groupBy(_._2)
+      .toList
+      .filter { case (name, _) => duplicateTaskNames.contains(name) && !name.contains('>') }
+      .sortBy(_._1)
+      .foreach { case (_, sameNameDeclarations) =>
+        val considered = sameNameDeclarations
+          .sortBy { case (ctx, taskName) => taskDeclarationTokenIndex(ctx, taskName) }
+          .filterNot { case (ctx, taskName) => taskIdentityFor(ctx, taskName).isDefined }
+        val candidateSets = considered.map { case (ctx, taskName) =>
+          refinedTaskScopeCandidates(taskName, callTaskTargets(ctx)).toSet
+        }
+        val scopes = resolveDuplicateTaskCandidates(candidateSets)
+        considered.zip(scopes).foreach { case ((ctx, taskName), scope) =>
+          scopesByTokenIndex(taskDeclarationTokenIndex(ctx, taskName)) = scope
+        }
       }
-    val refined = byId.filter(meta => calledTargets.forall(target => callAcceptable(meta, target)))
-    if (refined.size == 1) Option(refined.head) else None
+    scopesByTokenIndex.toMap
+  }
+
+  private def resolveDuplicateTaskCandidates(candidateSets: List[Set[RuleflowMeta]]): List[Option[RuleflowMeta]] = {
+    val unionSize = candidateSets.flatten.toSet.size
+    if (candidateSets.size == unionSize) eliminateTaskScopeCandidates(candidateSets)
+    else {
+      val singletonUuids = candidateSets.zipWithIndex.collect {
+        case (candidates, index) if candidates.size == 1 =>
+          candidates.head.uuid -> index
+      }
+      val conflicting = singletonUuids
+        .groupBy(_._1)
+        .collect { case (uuid, declarations) if declarations.size > 1 => uuid }
+        .toSet
+      candidateSets.map {
+        case candidates if candidates.size == 1 && !conflicting.contains(candidates.head.uuid) =>
+          Option(candidates.head)
+        case _ => None
+      }
+    }
+  }
+
+  private def eliminateTaskScopeCandidates(candidateSets: List[Set[RuleflowMeta]]): List[Option[RuleflowMeta]] = {
+    val remaining   = candidateSets.toArray
+    val assignments = Array.fill(candidateSets.size)(Option.empty[RuleflowMeta])
+    val conflicted  = mutable.Set.empty[Int]
+    var continue    = true
+    while (continue) {
+      val singletonIndices = remaining.indices.iterator
+        .filter(index => assignments(index).isEmpty && !conflicted.contains(index) && remaining(index).size == 1)
+        .toList
+      if (singletonIndices.isEmpty) {
+        continue = false
+      } else {
+        val singletonGroups = singletonIndices.groupBy(index => remaining(index).head.uuid)
+        val singletonSet    = singletonIndices.toSet
+        singletonGroups.foreach {
+          case (_, List(index)) => assignments(index) = Option(remaining(index).head)
+          case (_, indices)     => conflicted ++= indices
+        }
+        val consumedUuids = singletonGroups.keySet
+        remaining.indices
+          .filterNot(index =>
+            singletonSet.contains(index) || assignments(index).isDefined || conflicted.contains(index)
+          )
+          .foreach { index =>
+            remaining(index) = remaining(index).filterNot(meta => consumedUuids.contains(meta.uuid))
+          }
+      }
+    }
+
+    val duplicateAssignments = assignments.zipWithIndex
+      .collect { case (Some(meta), index) => meta.uuid -> index }
+      .groupBy(_._1)
+      .collect { case (_, declarations) if declarations.size > 1 => declarations.map(_._2) }
+      .flatten
+      .toSet
+    assignments.zipWithIndex.map {
+      case (Some(meta), index) if !conflicted.contains(index) && !duplicateAssignments.contains(index) => Option(meta)
+      case _                                                                                           => None
+    }.toList
   }
 
   /** `@uuid` suffix applied to the fullName of a scoped duplicate task name; empty otherwise. */
@@ -278,9 +391,14 @@ trait AstForFlow {
 
   /** Scope for a task declaration: an exact (file, line, name) identity record wins over `.rfl` inference. */
   private def declScope(ctx: ParserRuleContext, name: String): (Option[RuleflowMeta], Option[TaskIdentityRecord]) = {
-    val identity =
-      taskIdentity.records.get(TaskIdentityKey(fileBasename, Option(ctx.getStart).map(_.getLine).getOrElse(-1), name))
-    (identity.map(identityScope).orElse(taskScopeFor(name, callTaskTargets(ctx))), identity)
+    val identity = taskIdentityFor(ctx, name)
+    val scope    = identity.map(identityScope).orElse {
+      Option(ctx.getStart)
+        .map(_.getTokenIndex)
+        .flatMap(duplicateTaskScopesByTokenIndex.get)
+        .getOrElse(taskScopeFor(name, callTaskTargets(ctx)))
+    }
+    (scope, identity)
   }
 
   /** A sidecar record as scope: reuse the loaded `.rfl` meta of the same uuid when it exists (unioning the
