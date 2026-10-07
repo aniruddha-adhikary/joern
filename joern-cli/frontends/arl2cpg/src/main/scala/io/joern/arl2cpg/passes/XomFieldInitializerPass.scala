@@ -15,6 +15,7 @@ import com.github.javaparser.ast.expr.{
   TextBlockLiteralExpr,
   UnaryExpr
 }
+import io.joern.arl2cpg.util.InputFiles
 import io.joern.javasrc2cpg.util.SourceParser
 import io.joern.x2cpg.frontendspecific.arl2cpg.{ArlFindings, ArlTags}
 import io.shiftleft.codepropertygraph.generated.{Cpg, DiffGraphBuilder}
@@ -113,16 +114,9 @@ class XomFieldInitializerPass(cpg: Cpg, xomSrcPaths: Set[String]) extends CpgPas
   }
 
   private def javaFiles(root: Path): List[Path] = {
-    val stream = Files.walk(root)
-    try {
-      stream.iterator.asScala
-        .filter(path => Files.isRegularFile(path) && path.toString.endsWith(".java"))
-        .map(normalize)
-        .toList
-        .sortBy(_.toString)
-    } finally {
-      stream.close()
-    }
+    InputFiles
+      .walk(root, "--xom-src", path => Files.isRegularFile(path) && path.toString.endsWith(".java"))
+      .map(normalize)
   }
 
   private def normalize(path: String): Path = Paths.get(path).toAbsolutePath.normalize()
