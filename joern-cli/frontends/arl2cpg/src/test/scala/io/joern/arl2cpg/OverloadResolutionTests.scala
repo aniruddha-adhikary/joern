@@ -233,6 +233,12 @@ ruleset R (S) {
           |    public static int nested(int value) { return value; }
           |  }
           |}
+          |""".stripMargin,
+      "jaronly/ClasspathOnly.java" ->
+        """package jaronly;
+          |public class ClasspathOnly {
+          |  public String answer() { return "ok"; }
+          |}
           |""".stripMargin
     )
     val sourceDir  = root.resolve("stub-sources")
@@ -330,6 +336,81 @@ ruleset R (S) {
       |  public String name;
       |}
       |""".stripMargin
+
+  "XOM body calls" should {
+
+    "resolve methods found only in inference JARs" in {
+      FileUtil.usingTemporaryDirectory("arl2cpg-xom-classpath") { dir =>
+        val (jar, _) = compileStubSources(dir)
+        withCpg(
+          "",
+          javaSources = Map(
+            "client/Caller.java" ->
+              """package client;
+                |public class Caller {
+                |  public String call(jaronly.ClasspathOnly value) { return value.answer(); }
+                |}
+                |""".stripMargin
+          ),
+          classpath = Seq(jar.toString)
+        ) { cpg =>
+          val xomCalls = cpg.call
+            .filter(call => call.file.name.headOption.exists(filename => !filename.endsWith(".arl")))
+            .filterNot(_.name.startsWith("<operator>"))
+            .l
+          val call = xomCalls.find(_.name == "answer").get
+          call.methodFullName shouldBe "jaronly.ClasspathOnly.answer:java.lang.String()"
+          ArlFindings
+            .findings(cpg, Codes.UnresolvedCallTarget)
+            .filter(finding => ArlFindings.value(finding, Keys.CallId) == call.id().toString) shouldBe empty
+        }
+      }
+    }
+
+    "report unresolved calls with XOM method evidence" in withCpg(
+      "",
+      javaSources = Map(
+        "client/UnknownCalls.java" ->
+          """package client;
+            |public class UnknownCalls {
+            |  public void check() { unknown.Thing.go(); }
+            |}
+            |""".stripMargin
+      )
+    ) { cpg =>
+      val call = cpg.call
+        .filter(call => call.file.name.headOption.exists(filename => !filename.endsWith(".arl")))
+        .find(_.name == "go")
+        .get
+      val findings = ArlFindings
+        .findings(cpg, Codes.UnresolvedCallTarget)
+        .filter(finding => ArlFindings.value(finding, Keys.CallId) == call.id().toString)
+      findings should have size 1
+      val finding = findings.head
+      ArlFindings.reason(finding) shouldBe "xom-body"
+      ArlFindings.value(finding, Keys.Severity) shouldBe "unresolved"
+      ArlFindings.value(finding, "method") shouldBe call.start
+        .repeat(_.astParent)(_.until(_.isMethod))
+        .isMethod
+        .fullName
+        .head
+      ArlFindings.value(finding, Keys.Filename) shouldBe call.file.name.head
+    }
+
+    "return a failure when an XOM source path cannot be imported" in {
+      FileUtil.usingTemporaryDirectory("arl2cpg-xom-import-failure") { dir =>
+        Files.writeString(dir.resolve("rules.arl"), ruleSource(""))
+        val missingXomPath = dir.resolve("missing-xom").toString
+        val failure = new Arl2Cpg()
+          .createCpg(Config().withInputPath(dir.toString).withXomSrcPaths(Set(missingXomPath)))
+          .failed
+          .get
+        failure shouldBe a[IllegalStateException]
+        failure.getMessage shouldBe s"Failed to import XOM sources from '$missingXomPath'"
+        failure.getCause shouldBe a[java.io.FileNotFoundException]
+      }
+    }
+  }
 
   "aggregate labels" should {
 
