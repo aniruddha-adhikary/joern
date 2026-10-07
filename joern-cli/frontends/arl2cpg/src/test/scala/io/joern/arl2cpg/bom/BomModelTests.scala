@@ -25,6 +25,43 @@ class BomModelTests extends AnyWordSpec with Matchers {
   }
 
   "BomModel.load" should {
+    "load top-level properties before the package and keep class members" in {
+      FileUtil.usingTemporaryDirectory("arl2cpg-bom-top-level-property") { directory =>
+        val path = directory.resolve("top-level-property.bom")
+        Files.writeString(
+          path,
+          """property uuid "00000000-0000-0000-0000-000000000001";
+            |package loan;
+            |public class Foo { void compute(); }
+            |""".stripMargin
+        )
+
+        val parsed = BomParserFacade.parse(path)
+        parsed.properties shouldBe List(BomProperty("uuid", Some("00000000-0000-0000-0000-000000000001")))
+
+        val model = BomModel.load(Nil, Seq(path.toString))
+        model.diagnostics shouldBe empty
+        model.files.map(_.properties) shouldBe List(parsed.properties)
+        model.types.map(_.declaration.fullName) shouldBe List("loan.Foo")
+        model.types.head.declaration.members.map(_.name) shouldBe List("compute")
+      }
+    }
+
+    "accept a top-level property between class declarations" in {
+      val parsed = BomParserFacade.parse(
+        "inter-class-property.bom",
+        """package loan;
+          |class Before {}
+          |property uuid "first";
+          |property version "second";
+          |class After {}
+          |""".stripMargin
+      )
+
+      parsed.properties shouldBe List(BomProperty("uuid", Some("first")), BomProperty("version", Some("second")))
+      parsed.types.map(_.name) shouldBe List("Before", "After")
+    }
+
     "load directory files in sorted order and fail closed on duplicates and missing includes" in {
       FileUtil.usingTemporaryDirectory("arl2cpg-bom-directory") { directory =>
         Files.writeString(
