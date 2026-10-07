@@ -225,31 +225,33 @@ object BomModelLoader {
   }
 
   private def loadJar(path: Path): BomSource = {
-    val jar = new JarFile(path.toFile)
     try {
-      val entries = jar
-        .entries()
-        .asScala
-        .filter(entry => !entry.isDirectory && entry.getName.endsWith(".bom"))
-        .toList
-        .sortBy(_.getName)
-      val files = entries.map { entry =>
-        val stream = jar.getInputStream(entry)
-        val bytes  = try stream.readAllBytes()
-        finally stream.close()
-        val entryName = entry.getName.replace('\\', '/')
-        entryName -> BomInput(
-          s"${path.getFileName}!/$entryName",
-          s"${path.toRealPath()}!/$entryName",
-          new String(bytes, StandardCharsets.UTF_8)
-        )
-      }.toMap
-      BomSource(s"jar:${path.toRealPath()}", path.getFileName.toString, files, None, Nil)
+      val jar = new JarFile(path.toFile)
+      try {
+        val entries = jar
+          .entries()
+          .asScala
+          .filter(entry => !entry.isDirectory && entry.getName.endsWith(".bom"))
+          .toList
+          .sortBy(_.getName)
+        val files = entries.map { entry =>
+          val stream = jar.getInputStream(entry)
+          val bytes  = try stream.readAllBytes()
+          finally stream.close()
+          val entryName = entry.getName.replace('\\', '/')
+          entryName -> BomInput(
+            s"${path.getFileName}!/$entryName",
+            s"${path.toRealPath()}!/$entryName",
+            new String(bytes, StandardCharsets.UTF_8)
+          )
+        }.toMap
+        BomSource(s"jar:${path.toRealPath()}", path.getFileName.toString, files, None, Nil)
+      } finally {
+        jar.close()
+      }
     } catch {
       case NonFatal(exception) =>
-        throw new IllegalArgumentException(s"unable to read BOM entries from --xom-classpath jar '$path'", exception)
-    } finally {
-      jar.close()
+        throw new IllegalArgumentException(s"--xom-classpath jar '$path' is unreadable", exception)
     }
   }
 

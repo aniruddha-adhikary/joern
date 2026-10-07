@@ -74,7 +74,7 @@ public class LoanUtil {
     }
   }
 
-  private def withLinkedSourceRoots(arlInputSymlink: Boolean, xomSourceSymlink: Boolean)(f: Cpg => Unit): Unit = {
+  private def withLinkedSourceRoots[T](arlInputSymlink: Boolean, xomSourceSymlink: Boolean)(f: Cpg => T): T = {
     FileUtil.usingTemporaryDirectory("arl2cpg-linked-source-roots") { dir =>
       val arlRoot = Files.createDirectories(dir.resolve("arl"))
       Files.writeString(arlRoot.resolve("rules.arl"), arlCode)
@@ -107,16 +107,26 @@ public class LoanUtil {
 
   "ARL linked against the XOM" should {
 
-    "follow a symlinked main ARL input directory" in withLinkedSourceRoots(arlInputSymlink = true, xomSourceSymlink = false) {
-      cpg =>
+    "produce the same methods from a symlinked main ARL input directory" in {
+      val realMethods = withLinkedSourceRoots(arlInputSymlink = false, xomSourceSymlink = false) {
+        _.method.fullName.l.sorted
+      }
+      withLinkedSourceRoots(arlInputSymlink = true, xomSourceSymlink = false) { cpg =>
+        cpg.method.fullName.l.sorted shouldBe realMethods
         cpg.method.name("getBankruptcyAge").size shouldBe 1
         cpg.call.name("getBankruptcyAge").head.methodFullName shouldBe "loan.Borrower.getBankruptcyAge:int()"
+      }
     }
 
-    "import XOM sources from a symlinked directory" in withLinkedSourceRoots(arlInputSymlink = false, xomSourceSymlink = true) {
-      cpg =>
+    "import and resolve XOM sources from a symlinked directory as from the real directory" in {
+      val realMethods = withLinkedSourceRoots(arlInputSymlink = false, xomSourceSymlink = false) {
+        _.method.fullName.l.sorted
+      }
+      withLinkedSourceRoots(arlInputSymlink = false, xomSourceSymlink = true) { cpg =>
+        cpg.method.fullName.l.sorted shouldBe realMethods
         cpg.typeDecl.fullName.l should contain("loan.Borrower")
         cpg.call.name("getBankruptcyAge").head.methodFullName shouldBe "loan.Borrower.getBankruptcyAge:int()"
+      }
     }
 
     "type the signature-param fieldAccess with the Java type" in withXomCpg { cpg =>

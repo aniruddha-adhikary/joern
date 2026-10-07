@@ -1,5 +1,6 @@
 package io.joern.arl2cpg
 
+import io.joern.arl2cpg.passes.resolution.TypeModel
 import io.joern.x2cpg.frontendspecific.arl2cpg.ArlFindings
 import io.joern.x2cpg.frontendspecific.arl2cpg.ArlFindings.{Codes, Keys}
 import io.joern.x2cpg.Defines
@@ -1128,10 +1129,20 @@ ruleset R (S) {
         val missing = dir.resolve("missing-classpath")
         val unusable = Files.createDirectories(dir.resolve("unusable-classpath"))
         Files.writeString(unusable.resolve("README"), "no classes or jars")
+        val corruptJar = dir.resolve("corrupt.jar")
+        Files.writeString(corruptJar, "not a jar")
+        val nestedJarDir = Files.createDirectories(dir.resolve("classpath-with-corrupt-jar"))
+        val nestedCorruptJar = nestedJarDir.resolve("nested.jar")
+        Files.writeString(nestedCorruptJar, "not a jar")
 
-        List(missing, unusable).foreach { path =>
+        List(
+          (missing, missing, Option.empty[Path]),
+          (unusable, unusable, Option.empty[Path]),
+          (corruptJar, corruptJar, Some(corruptJar)),
+          (nestedJarDir, nestedCorruptJar, Some(nestedCorruptJar))
+        ).foreach { case (classpathPath, expectedPath, unreadableJar) =>
           val result = new Arl2Cpg().createCpg(
-            Config().withInputPath(inputDir.toString).withXomClasspath(Seq(path.toString))
+            Config().withInputPath(inputDir.toString).withXomClasspath(Seq(classpathPath.toString))
           )
           val error = result.failed.get
           val messages =
@@ -1140,7 +1151,16 @@ ruleset R (S) {
               .flatMap(exception => Option(exception.getMessage))
               .mkString("\n")
           messages should include("--xom-classpath")
-          messages should include(path.toString)
+          messages should include(expectedPath.toString)
+          unreadableJar.foreach(path => messages should include(s"--xom-classpath jar '$path' is unreadable"))
+        }
+
+        List((corruptJar, corruptJar), (nestedJarDir, nestedCorruptJar)).foreach { case (classpathPath, jarPath) =>
+          val error = intercept[IllegalArgumentException] {
+            new TypeModel(Nil, Seq(classpathPath.toString))
+          }
+          error.getMessage shouldBe s"--xom-classpath jar '$jarPath' is unreadable"
+          error.getCause should not be null
         }
       }
     }

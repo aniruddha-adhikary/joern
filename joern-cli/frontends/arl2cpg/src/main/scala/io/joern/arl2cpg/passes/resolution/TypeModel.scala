@@ -422,7 +422,7 @@ final class TypeModel(sourceDecls: Seq[TypeDecl], classpath: Seq[String], bom: B
       } finally jar.close()
     } catch {
       case NonFatal(exception) =>
-        logger.warn(s"Ignoring unreadable --xom-classpath jar '$path'", exception)
+        throw new IllegalArgumentException(s"--xom-classpath jar '$path' is unreadable", exception)
     }
   }
 
