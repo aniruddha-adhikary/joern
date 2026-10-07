@@ -5,6 +5,9 @@ import io.joern.x2cpg.frontendspecific.arl2cpg.ArlFindings
 import io.shiftleft.codepropertygraph.generated.{DispatchTypes, Operators}
 import io.shiftleft.codepropertygraph.generated.nodes.*
 import io.shiftleft.semanticcpg.language.*
+import io.shiftleft.semanticcpg.utils.FileUtil
+
+import java.nio.file.Files
 
 class RuleTests extends Arl2CpgSuite {
 
@@ -123,6 +126,94 @@ ruleset IlrContext (EngineDataClass){
       agg.code should include("aggregate")
       cpg.local.name("count_label").headOption should not be empty
       cpg.local.name("count_label").head.typeFullName shouldBe "int"
+    }
+
+    "lower collect from sources as casts and retain its filter" in {
+      FileUtil.usingTemporaryDirectory("arl2cpg-aggregate-collect-from") { directory =>
+        val xomDir  = directory.resolve("xom")
+        val sources = Map(
+          "acme/Order.java" ->
+            """package acme;
+              |public class Order { public java.util.List<Line> lines; }
+              |""".stripMargin,
+          "acme/Line.java" ->
+            """package acme;
+              |public class Line { public Integer sequenceNumber; }
+              |""".stripMargin,
+          "acme/Result.java" ->
+            """package acme;
+              |public class Result {}
+              |""".stripMargin,
+          "ilog/rules/brl/IlrCollectionUtil.java" ->
+            """package ilog.rules.brl;
+              |public class IlrCollectionUtil {
+              |  public static int getSize(java.util.Collection values) { return values.size(); }
+              |}
+              |""".stripMargin
+        )
+        sources.foreach { case (relativePath, source) =>
+          val path = xomDir.resolve(relativePath)
+          Files.createDirectories(path.getParent)
+          Files.writeString(path, source)
+        }
+
+        val source =
+          """import acme.Order;
+            |import acme.Line;
+            |import acme.Result;
+            |import java.util.ArrayList;
+            |import ilog.rules.brl.IlrCollectionUtil;
+            |public signature S extends java.lang.Object {}
+            |ruleset R (S) {
+            |  rule `aggregate.from` {
+            |    when {
+            |      o : Order();
+            |      numberedLines:aggregate {
+            |        collect_class_1 : Line(sequenceNumber.intValue() > 0) from o.lines;
+            |      } do {
+            |        ArrayList<Line>{collect_class_1};
+            |      }
+            |      r : Result();
+            |    }
+            |    then {
+            |      System.out.println(IlrCollectionUtil.getSize(numberedLines));
+            |    }
+            |  }
+            |}
+            |""".stripMargin
+        val inputDir = directory.resolve("input")
+        Files.createDirectories(inputDir)
+        Files.writeString(inputDir.resolve("aggregate.arl"), source)
+        val config = Config()
+          .withInputPath(inputDir.toString)
+          .withXomSrcPaths(Set(xomDir.toString))
+          .withAllowUnknown(true)
+        val cpg = new Arl2Cpg().createCpg(config).get
+        try {
+          val collectLocal = cpg.local.nameExact("collect_class_1").head
+          collectLocal.typeFullName shouldBe "acme.Line"
+          val labelLocal = cpg.local.nameExact("numberedLines").head
+          labelLocal.typeFullName shouldBe "java.util.ArrayList"
+          cpg.identifier.nameExact("numberedLines").l.map(_.typeFullName).distinct shouldBe
+            List("java.util.ArrayList")
+
+          val bindingAssignment =
+            cpg.call.name(Operators.assignment).find(_.argument.l.exists(_.code == "collect_class_1")).get
+          bindingAssignment.argument.l.find(_.argumentIndex == 2).get match {
+            case cast: Call => cast.name shouldBe Operators.cast
+            case other      => fail(s"Expected collect assignment RHS to be a cast, got $other")
+          }
+
+          val aggregateCall = cpg.call.name(ArlOperators.aggregate).head
+          aggregateCall.argument.l.exists(_.code.contains("sequenceNumber.intValue() > 0")) shouldBe true
+
+          val getSize = cpg.call.nameExact("getSize").head
+          getSize.methodFullName shouldBe "ilog.rules.brl.IlrCollectionUtil.getSize:int(java.util.Collection)"
+          ArlFindings
+            .findings(cpg, ArlFindings.Codes.UnresolvedCallTarget)
+            .filter(f => ArlFindings.value(f, ArlFindings.Keys.CallId) == getSize.id().toString) shouldBe empty
+        } finally cpg.close()
+      }
     }
 
     "lower evaluate with binding to a local + assignment + conjuncts" in {

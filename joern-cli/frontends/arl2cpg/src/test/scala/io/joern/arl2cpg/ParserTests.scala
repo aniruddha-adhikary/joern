@@ -64,6 +64,18 @@ class ParserTests extends AnyWordSpec with Matchers {
           |""".stripMargin) shouldBe true
     }
 
+    "parse collect source expressions introduced by 'from'" in {
+      parsesCleanly("""ruleset R (S){
+          |  rule `r` {
+          |    when {
+          |      items: aggregate { item: Borrower(x > 0) from borrower; } do { count {item}; }
+          |    }
+          |    then { }
+          |  }
+          |}
+          |""".stripMargin) shouldBe true
+    }
+
     "report exactly 1 syntax error for a missing ';' and still produce a unit" in {
       val result = ArlParserFacade.parse(writeTmpArl("package x.y; rule Broken { when {} then { insert x } }").toString)
       result.isSuccess shouldBe true

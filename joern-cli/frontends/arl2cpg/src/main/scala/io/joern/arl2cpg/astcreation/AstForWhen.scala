@@ -239,17 +239,19 @@ trait AstForWhen {
     }
 
     val collectResults = ctx.collectPattern().asScala.toList.map { collect =>
-      val bindingName            = stripBackticks(collect.bindingName().getText)
-      val typeName               = typeFullNameFromQualifiedName(collect.qualifiedName())
-      val exprs                  = collect.expression().asScala.toList
-      val inSource               = terminalTexts(collect).contains("in")
-      val (testExpr, sourceExpr) = exprs match {
-        case single :: Nil      => if (inSource) (None, Some(single)) else (Some(single), None)
-        case test :: src :: Nil => (Some(test), Some(src))
-        case _                  => (None, exprs.lastOption.filter(_ => inSource))
+      val bindingName = stripBackticks(collect.bindingName().getText)
+      val typeName    = typeFullNameFromQualifiedName(collect.qualifiedName())
+      val exprs       = collect.expression().asScala.toList
+      val sourceKind  = childrenOf(collect).collectFirst {
+        case terminal: TerminalNode if terminal.getText == "from" => "from"
+        case terminal: TerminalNode if terminal.getText == "in"   => "in"
       }
-      val stmts =
-        bindingLocalAndSourceStmts(collect, bindingName, typeName, if (inSource) Some("in") else None, sourceExpr)
+      val (testExpr, sourceExpr) = exprs match {
+        case single :: Nil      => if (sourceKind.isDefined) (None, Some(single)) else (Some(single), None)
+        case test :: src :: Nil => (Some(test), Some(src))
+        case _                  => (None, exprs.lastOption.filter(_ => sourceKind.isDefined))
+      }
+      val stmts   = bindingLocalAndSourceStmts(collect, bindingName, typeName, sourceKind, sourceExpr)
       val testAst = testExpr.map { test =>
         implicitReceiver.push(Some(bindingName -> typeName))
         try astForExpression(test)
