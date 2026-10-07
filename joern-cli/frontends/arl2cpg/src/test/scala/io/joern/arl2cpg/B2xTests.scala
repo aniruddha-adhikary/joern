@@ -3,6 +3,8 @@ package io.joern.arl2cpg
 import io.joern.x2cpg.frontendspecific.arl2cpg.ArlFindings
 import io.joern.x2cpg.frontendspecific.arl2cpg.ArlFindings.{Codes, Reasons}
 import io.joern.x2cpg.frontendspecific.arl2cpg.ArlTags
+import io.joern.x2cpg.frontendspecific.arl2cpg.ArlExport
+import io.joern.arl2cpg.b2x.B2xModel
 import io.joern.arl2cpg.passes.Gate1Violation
 import io.joern.x2cpg.X2Cpg
 import io.shiftleft.codepropertygraph.generated.Cpg
@@ -80,6 +82,43 @@ class B2xTests extends AnyWordSpec with Matchers with BeforeAndAfterAll {
        |</class></translation>
        |""".stripMargin
 
+  private val attributeMapping =
+    """<?xml version="1.0"?>
+      |<translation><lang>ARL</lang><class>
+      |  <businessName>com.acme.AttributeSample</businessName>
+      |  <attribute><name>stringValue</name><type>java.lang.String</type>
+      |    <getter language="arl"><![CDATA[return "153";]]></getter>
+      |  </attribute>
+      |  <attribute><name>integerValue</name><type>int</type>
+      |    <getter language="arl"><![CDATA[return 42;]]></getter>
+      |  </attribute>
+      |  <attribute><name>negativeDouble</name><type>double</type>
+      |    <getter language="arl"><![CDATA[return -1.5;]]></getter>
+      |  </attribute>
+      |  <attribute><name>booleanValue</name><type>boolean</type>
+      |    <getter language="arl"><![CDATA[return true;]]></getter>
+      |  </attribute>
+      |  <attribute><name>nullValue</name><type>java.lang.Object</type>
+      |    <getter language="arl"><![CDATA[return null;]]></getter>
+      |  </attribute>
+      |  <attribute><name>expressionValue</name><type>java.lang.Integer</type>
+      |    <getter language="arl"><![CDATA[return this.getBand();]]></getter>
+      |  </attribute>
+      |  <attribute><name>missingType</name>
+      |    <getter language="arl"><![CDATA[return 7;]]></getter>
+      |  </attribute>
+      |  <attribute><name>emptyType</name><type/>
+      |    <getter language="arl"><![CDATA[return 8;]]></getter>
+      |  </attribute>
+      |  <attribute><name>duplicateType</name><type>java.lang.Integer</type><type>java.lang.Long</type>
+      |    <getter language="arl"><![CDATA[return 9;]]></getter>
+      |  </attribute>
+      |  <attribute><name>setterOnly</name><type>int</type>
+      |    <setter language="arl"><![CDATA[this.band = value;]]></setter>
+      |  </attribute>
+      |</class></translation>
+      |""".stripMargin
+
   private def divideCall(cpg: Cpg): Call = cpg.call.nameExact("divideInternal").head
 
   private def findingsForCall(cpg: Cpg, code: String, call: Call) =
@@ -95,6 +134,8 @@ class B2xTests extends AnyWordSpec with Matchers with BeforeAndAfterAll {
   }
 
   private def tags(call: Call, name: String): Set[String] = call.tag.nameExact(name).value.toSet
+
+  private def methodTags(method: Method, name: String): Set[String] = method.tag.nameExact(name).value.toSet
 
   private def calls(cpg: Cpg, receiver: String, name: String, arity: Int): List[Call] =
     cpg.call.nameExact(name).filter(c => c.argument.size - 1 == arity).filter(_.receiver.code.contains(receiver)).l
@@ -162,6 +203,9 @@ class B2xTests extends AnyWordSpec with Matchers with BeforeAndAfterAll {
       method.head.filename shouldBe loanB2x.toString
       method.head.code should include("this.setRejected(true)")
       method.head.annotation.name("arlKind").parameterAssign.value.code.l shouldBe List("function")
+      val summary = withB2x.method.fullNameExact("com.acme.loan.model.Outcome.summary:ANY()").head
+      summary.filename shouldBe loanB2x.toString
+      summary.annotation.name("arlKind").parameterAssign.value.code.l shouldBe List("b2x-attribute")
       calls(withB2x, "outcome", "rejectWith", 2).map(_.methodFullName).toSet shouldBe Set(method.head.fullName)
       calls(withB2x, "outcome", "rejectWith", 2).foreach(c =>
         tags(c, ArlTags.ResolvesTo) shouldBe Set(method.head.fullName)
@@ -337,6 +381,144 @@ class B2xTests extends AnyWordSpec with Matchers with BeforeAndAfterAll {
           "com.acme.loan.model.Outcome.rejectWith(com.acme.loan.model.Reason,int)"
         )
       }
+    }
+
+    "create and export typed B2X attribute getter methods with literal metadata" in {
+      val (cpg, b2xPath) =
+        buildWithMapping(signatureArl, attributeMapping, _.withAllowUnknown(true))
+      try {
+        val expectedFullNames = Map(
+          "stringValue"     -> "com.acme.AttributeSample.stringValue:java.lang.String()",
+          "integerValue"    -> "com.acme.AttributeSample.integerValue:int()",
+          "negativeDouble"  -> "com.acme.AttributeSample.negativeDouble:double()",
+          "booleanValue"    -> "com.acme.AttributeSample.booleanValue:boolean()",
+          "nullValue"       -> "com.acme.AttributeSample.nullValue:java.lang.Object()",
+          "expressionValue" -> "com.acme.AttributeSample.expressionValue:java.lang.Integer()",
+          "missingType"     -> "com.acme.AttributeSample.missingType:ANY()",
+          "emptyType"       -> "com.acme.AttributeSample.emptyType:ANY()",
+          "duplicateType"  -> "com.acme.AttributeSample.duplicateType:ANY()"
+        )
+        expectedFullNames.foreach { case (name, fullName) =>
+          val method = cpg.method.fullNameExact(fullName).head
+          method.name shouldBe name
+          method.signature shouldBe fullName.split(":").last
+          method.methodReturn.typeFullName shouldBe fullName.split(":").last.stripSuffix("()")
+          method.filename shouldBe b2xPath.toString
+          method.annotation.name("arlKind").parameterAssign.value.code.l shouldBe List("b2x-attribute")
+        }
+        cpg.method.nameExact("setterOnly").l shouldBe empty
+
+        val model  = B2xModel.parse(b2xPath)
+        val setter = model.members.find(_.kind == "setter").get
+        setter.paramTypes shouldBe List("int")
+        setter.returnType shouldBe None
+        model.candidates("com.acme.AttributeSample", "stringValue", 0) shouldBe empty
+
+        val stringMethod = cpg.method.fullNameExact(expectedFullNames("stringValue")).head
+        methodTags(stringMethod, ArlTags.LiteralKind) shouldBe Set("string")
+        methodTags(stringMethod, ArlTags.LiteralValue) shouldBe Set("153")
+        val intMethod = cpg.method.fullNameExact(expectedFullNames("integerValue")).head
+        methodTags(intMethod, ArlTags.LiteralKind) shouldBe Set("int")
+        methodTags(intMethod, ArlTags.LiteralValue) shouldBe Set("42")
+        val negativeMethod = cpg.method.fullNameExact(expectedFullNames("negativeDouble")).head
+        methodTags(negativeMethod, ArlTags.LiteralKind) shouldBe Set("double")
+        methodTags(negativeMethod, ArlTags.LiteralValue) shouldBe Set("-1.5")
+        val booleanMethod = cpg.method.fullNameExact(expectedFullNames("booleanValue")).head
+        methodTags(booleanMethod, ArlTags.LiteralKind) shouldBe Set("boolean")
+        methodTags(booleanMethod, ArlTags.LiteralValue) shouldBe Set("true")
+        val nullMethod = cpg.method.fullNameExact(expectedFullNames("nullValue")).head
+        methodTags(nullMethod, ArlTags.LiteralKind) shouldBe Set("null")
+        methodTags(nullMethod, ArlTags.LiteralValue) shouldBe empty
+        val expressionMethod = cpg.method.fullNameExact(expectedFullNames("expressionValue")).head
+        methodTags(expressionMethod, ArlTags.LiteralKind) shouldBe empty
+        methodTags(expressionMethod, ArlTags.LiteralValue) shouldBe empty
+
+        val json       = ujson.read(ArlExport.toJson(cpg, "attributes.cpg"))
+        val attributes = json("b2xAttributes").arr
+        attributes.map(_("name").str).toList shouldBe expectedFullNames.keys.toList.sorted
+        val byName = attributes.map(attribute => attribute("name").str -> attribute).toMap
+        byName("stringValue")("literal").obj.toMap shouldBe Map(
+          "kind"  -> ujson.Str("string"),
+          "value" -> ujson.Str("153")
+        )
+        byName("integerValue")("literal").obj.toMap shouldBe Map(
+          "kind"  -> ujson.Str("int"),
+          "value" -> ujson.Str("42")
+        )
+        byName("negativeDouble")("literal").obj.toMap shouldBe Map(
+          "kind"  -> ujson.Str("double"),
+          "value" -> ujson.Str("-1.5")
+        )
+        byName("booleanValue")("literal").obj.toMap shouldBe Map(
+          "kind"  -> ujson.Str("boolean"),
+          "value" -> ujson.Str("true")
+        )
+        byName("nullValue")("literal").obj.toMap shouldBe Map("kind" -> ujson.Str("null"))
+        byName("expressionValue").obj.contains("literal") shouldBe false
+        expectedFullNames.foreach { case (name, fullName) =>
+          val methodJson = json("methods").arr.find(_("fullName").str == fullName).get
+          byName(name)("methodStableId").str shouldBe methodJson("stableId").str
+        }
+
+        val missingTypeMethod = cpg.method.fullNameExact(expectedFullNames("missingType")).head
+        val unknownFinding    =
+          ArlFindings.findings(cpg, Codes.B2xReturnTypeUnknown)
+            .find(finding => ArlFindings.value(finding, "b2xMember") == missingTypeMethod.fullName)
+            .get
+        ArlFindings.value(unknownFinding, ArlFindings.Keys.Severity) shouldBe "unresolved"
+        ArlFindings.value(unknownFinding, "b2xFile") shouldBe b2xPath.toString
+        ArlFindings.value(unknownFinding, ArlFindings.Keys.CallId) shouldBe ""
+        unknownFinding.evidence.map(_.id).toList shouldBe List(missingTypeMethod.id)
+        ArlFindings.findings(cpg, Codes.B2xUnmodelledElement)
+          .map(ArlFindings.reason)
+          .toSet should contain allOf ("attribute/type-empty", "attribute/type-duplicate")
+      } finally cpg.close()
+    }
+
+    "reuse a colliding Java getter METHOD and report the B2X attribute shadow" in {
+      val xomDir = Files.createTempDirectory("arl2cpg-b2x-attribute-xom")
+      tmpDirs ::= xomDir
+      val source = xomDir.resolve("com/acme/AttributeSample.java")
+      Files.createDirectories(source.getParent)
+      Files.writeString(
+        source,
+        """package com.acme;
+          |public class AttributeSample {
+          |  public String stringValue() { return "java"; }
+          |}
+          |""".stripMargin
+      )
+      val (cpg, b2xPath) =
+        buildWithMapping(
+          signatureArl,
+          attributeMapping,
+          _.withXomSrcPaths(Set(xomDir.toString)).withAllowUnknown(true),
+          validateCpg = false
+        )
+      try {
+        val fullName = "com.acme.AttributeSample.stringValue:java.lang.String()"
+        val method   = cpg.method.fullNameExact(fullName).head
+        cpg.method.fullNameExact(fullName).size shouldBe 1
+        method.filename should endWith("com/acme/AttributeSample.java")
+        methodTags(method, ArlTags.LiteralKind) shouldBe Set("string")
+        methodTags(method, ArlTags.LiteralValue) shouldBe Set("153")
+
+        val shadow = ArlFindings.findings(cpg, Codes.B2xShadowsMethod)
+          .find(finding => ArlFindings.value(finding, "b2xMember") == fullName)
+          .get
+        ArlFindings.value(shadow, ArlFindings.Keys.Severity) shouldBe "unresolved"
+        ArlFindings.value(shadow, "b2xFile") shouldBe b2xPath.toString
+        ArlFindings.value(shadow, "shadowedMethodFile") shouldBe method.filename
+        ArlFindings.value(shadow, ArlFindings.Keys.CallId) shouldBe ""
+        shadow.evidence.map(_.id).toList shouldBe List(method.id)
+
+        val json      = ujson.read(ArlExport.toJson(cpg, "attribute-shadow.cpg"))
+        val attribute = json("b2xAttributes").arr.find(_("name").str == "stringValue").get
+        json("methods").arr.find(_("fullName").str == fullName).get("arlKind").str shouldBe "b2x-attribute"
+        attribute("methodStableId").str shouldBe
+          json("methods").arr.find(_("fullName").str == fullName).get("stableId").str
+        attribute("literal")("value").str shouldBe "153"
+      } finally cpg.close()
     }
 
     "connect normal completion in B2X function bodies to METHOD_RETURN" in {

@@ -137,7 +137,7 @@ object ArlFindings {
     cpg.finding.filter(f => ArlFindings.code(f) == code).l
 }
 
-/** TAG names attached to ARL CALL nodes to record what a call does to its receiver, and how we know. */
+/** TAG names attached to ARL CALL and B2X attribute METHOD nodes to record effects and literal metadata. */
 object ArlTags {
 
   /** value: fullName of the B2X body METHOD the call resolves to. */
@@ -163,6 +163,12 @@ object ArlTags {
 
   /** value: `true` when an interval literal's upper bound is closed (`]`), otherwise `false`. */
   val IntervalUpperClosed = "ARL_INTERVAL_UPPER_CLOSED"
+
+  /** Literal kind recovered from a B2X attribute getter body. */
+  val LiteralKind = "ARL_LITERAL_KIND"
+
+  /** Unescaped literal value recovered from a B2X attribute getter body, when the literal has a value. */
+  val LiteralValue = "ARL_LITERAL_VALUE"
 
   def tag(builder: DiffGraphBuilder, node: AbstractNode, name: String, value: String): NewTag = {
     val tag = NewTag().name(name).value(value)

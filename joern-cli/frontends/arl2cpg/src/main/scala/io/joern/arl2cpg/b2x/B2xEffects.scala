@@ -109,7 +109,7 @@ object B2xEffects {
   /** Bodies are bare statements: wrapped in braces and parsed as a block, SLL with bail — a body that does not parse is
     * "we cannot read this one", not something to retry.
     */
-  private[b2x] def parseBody(body: String): Option[ARLParser.BlockContext] = Try {
+  private[arl2cpg] def parseBody(body: String): Option[ARLParser.BlockContext] = Try {
     val lexer = new ARLLexer(CharStreams.fromString(s"{\n$body\n}"))
     lexer.removeErrorListeners()
     lexer.addErrorListener(BailLexerErrorListener)

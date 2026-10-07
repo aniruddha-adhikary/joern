@@ -167,7 +167,23 @@ object B2xModel {
       childText(attribute, "name") match {
         case None       => unhandled += B2xUnhandled("attribute-without-name", excerpt(attribute))
         case Some(name) =>
-          elements(attribute).foreach { child =>
+          val children     = elements(attribute)
+          val typeElements = children.filter(localName(_) == "type")
+          typeElements
+            .drop(1)
+            .foreach(child => unhandled += B2xUnhandled("attribute/type-duplicate", excerpt(child)))
+          val attributeType =
+            if (typeElements.size == 1) {
+              val child = typeElements.head
+              val text  = child.getTextContent.trim
+              val value = if (text.nonEmpty) text else child.getAttribute("type").trim
+              if (value.nonEmpty) Some(value)
+              else {
+                unhandled += B2xUnhandled("attribute/type-empty", excerpt(child))
+                None
+              }
+            } else None
+          children.foreach { child =>
             localName(child) match {
               case tag if !AttributeChildren.contains(tag) =>
                 unhandled += B2xUnhandled(s"attribute/$tag", excerpt(child))
@@ -176,8 +192,8 @@ object B2xModel {
                   businessClass,
                   tag,
                   name,
-                  Nil,
-                  None,
+                  if (tag == "setter") attributeType.toList else Nil,
+                  if (tag == "getter") attributeType else None,
                   child.getAttribute("language"),
                   child.getTextContent.trim
                 )
