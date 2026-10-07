@@ -48,6 +48,9 @@ object ArlFindings {
 
     /** A B2X element the reader does not model — an effect possibly missing from the graph. */
     val B2xUnmodelledElement = "b2x-unmodelled-element"
+    val B2xMember            = "b2x-member"
+    val B2xReturnTypeUnknown = "b2x-return-type-unknown"
+    val B2xShadowsMethod     = "b2x-shadows-method"
 
     /** A Java call whose target could not be chosen from the receiver and static argument types. */
     val UnresolvedCallTarget = "unresolved-call-target"
@@ -73,10 +76,10 @@ object ArlFindings {
   }
 
   /** Severity mapping: `unknown-construct` and `syntax-error` are `error`; `unresolved-call-target`,
-    * `bom-type-unresolved`, `bom-duplicate-class`, `bom-include-missing`, and `b2x-unmodelled-element` are
-    * `unresolved`; `unresolved-call-effects` is `info` only for `callee-body-not-in-artifact` and `unresolved`
-    * otherwise; `bom-member` and `bom-files-not-loaded` are `info`. An unknown code fails instead of receiving a
-    * default.
+    * `bom-type-unresolved`, `bom-duplicate-class`, `bom-include-missing`, `b2x-unmodelled-element`,
+    * `b2x-return-type-unknown`, and `b2x-shadows-method` are `unresolved`; `unresolved-call-effects` is `info` only for
+    * `callee-body-not-in-artifact` and `unresolved` otherwise; `b2x-member`, `bom-member`, and `bom-files-not-loaded`
+    * are `info`. An unknown code fails instead of receiving a default.
     */
   private[arl2cpg] def severity(code: String, reason: String): String = (code, reason) match {
     case (Codes.UnknownConstruct | Codes.SyntaxError, _)                                  => "error"
@@ -84,6 +87,9 @@ object ArlFindings {
     case (Codes.UnresolvedCallEffects, Reasons.CalleeBodyNotInArtifact)                   => "info"
     case (Codes.UnresolvedCallEffects, _)                                                 => "unresolved"
     case (Codes.B2xUnmodelledElement, _)                                                  => "unresolved"
+    case (Codes.B2xReturnTypeUnknown, _)                                                  => "unresolved"
+    case (Codes.B2xShadowsMethod, _)                                                      => "unresolved"
+    case (Codes.B2xMember, _)                                                             => "info"
     case (Codes.BomMember, _)                                                             => "info"
     case (Codes.BomFilesNotLoaded, _)                                                     => "info"
     case (Codes.BomTypeUnresolved | Codes.BomDuplicateClass | Codes.BomIncludeMissing, _) =>

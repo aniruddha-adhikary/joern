@@ -39,6 +39,52 @@ class B2xTests extends AnyWordSpec with Matchers with BeforeAndAfterAll {
     cpg
   }
 
+  private val signatureArl =
+    """public signature BigDecimalRules extends java.lang.Object {
+      |  public in java.math.BigDecimal amount = null;
+      |}
+      |ruleset BigDecimalRules (BigDecimalRules) {
+      |  rule `divide` {
+      |    when {}
+      |    then { amount.divideInternal(amount); }
+      |  }
+      |}
+      |""".stripMargin
+
+  private def buildWithMapping(
+    arl: String,
+    mapping: String,
+    config: Config => Config = (config: Config) => config,
+    validateCpg: Boolean = true
+  ): (Cpg, Path) = {
+    val dir = Files.createTempDirectory("arl2cpg-b2x-signature")
+    tmpDirs ::= dir
+    Files.writeString(dir.resolve("signature.arl"), arl)
+    val b2xPath = dir.resolve("mapping.b2x")
+    Files.writeString(b2xPath, mapping)
+    val base = Config().withInputPath(dir.toString).withB2xPath(b2xPath.toString)
+    val cpg  = new Arl2Cpg().createCpg(config(base)).get
+    if (validateCpg) PostFrontendValidator(cpg, ValidationLevel.V3).run()
+    (cpg, b2xPath)
+  }
+
+  private def bigDecimalMapping(returnType: String): String =
+    s"""<?xml version="1.0"?>
+       |<translation><lang>ARL</lang><class>
+       |  <businessName>java.math.BigDecimal</businessName>
+       |  <method><name>divideInternal</name>
+       |    <parameter type="java.math.BigDecimal"/>
+       |    $returnType
+       |    <body language="arl"><![CDATA[this.result = value;]]></body>
+       |  </method>
+       |</class></translation>
+       |""".stripMargin
+
+  private def divideCall(cpg: Cpg): Call = cpg.call.nameExact("divideInternal").head
+
+  private def findingsForCall(cpg: Cpg, code: String, call: Call) =
+    ArlFindings.findings(cpg, code).filter(f => ArlFindings.value(f, ArlFindings.Keys.CallId) == call.id().toString)
+
   private lazy val withB2x: Cpg    = build(_.withB2xPath(loanB2x.toString))
   private lazy val withoutB2x: Cpg = build(Predef.identity)
 
@@ -122,6 +168,177 @@ class B2xTests extends AnyWordSpec with Matchers with BeforeAndAfterAll {
       )
     }
 
+    "use a declared B2X return type in method and call signatures" in {
+      val (cpg, b2xPath) =
+        buildWithMapping(
+          signatureArl,
+          bigDecimalMapping("<returnType>java.math.BigDecimal</returnType>")
+        )
+      try {
+        val call   = divideCall(cpg)
+        val method = cpg.method.fullNameExact("java.math.BigDecimal.divideInternal:java.math.BigDecimal(java.math.BigDecimal)").head
+        val fullName = "java.math.BigDecimal.divideInternal:java.math.BigDecimal(java.math.BigDecimal)"
+
+        call.methodFullName shouldBe fullName
+        call.signature shouldBe "java.math.BigDecimal(java.math.BigDecimal)"
+        call.typeFullName shouldBe "java.math.BigDecimal"
+        method.signature shouldBe "java.math.BigDecimal(java.math.BigDecimal)"
+        method.methodReturn.typeFullName shouldBe "java.math.BigDecimal"
+        method.filename shouldBe b2xPath.toString
+
+        val finding = findingsForCall(cpg, Codes.B2xMember, call).head
+        ArlFindings.value(finding, ArlFindings.Keys.Severity) shouldBe "info"
+        ArlFindings.value(finding, "b2xFile") shouldBe b2xPath.toString
+        ArlFindings.value(finding, "b2xMember") shouldBe fullName
+        ArlFindings.value(finding, "returnTypeSource") shouldBe "b2x"
+        finding.evidence.map(_.id).toList should contain(call.id())
+        findingsForCall(cpg, Codes.B2xReturnTypeUnknown, call) shouldBe empty
+      } finally cpg.close()
+    }
+
+    "fall back to the returnType attribute when its element text is empty" in {
+      val (cpg, _) = buildWithMapping(signatureArl, bigDecimalMapping("""<returnType type="java.math.BigDecimal"/>"""))
+      try {
+        val call = divideCall(cpg)
+        call.methodFullName shouldBe
+          "java.math.BigDecimal.divideInternal:java.math.BigDecimal(java.math.BigDecimal)"
+        ArlFindings.value(findingsForCall(cpg, Codes.B2xMember, call).head, "returnTypeSource") shouldBe "b2x"
+      } finally cpg.close()
+    }
+
+    "reuse a shadowed XOM method while retaining B2X effects" in {
+      val xomDir = Files.createTempDirectory("arl2cpg-b2x-signature-xom")
+      tmpDirs ::= xomDir
+      val source = xomDir.resolve("com/acme/money/Amount.java")
+      Files.createDirectories(source.getParent)
+      Files.writeString(
+        source,
+        """package com.acme.money;
+          |public class Amount {
+          |  public Amount divideInternal(Amount value) { return this; }
+          |}
+          |""".stripMargin
+      )
+      val arl =
+        """public signature AmountRules extends java.lang.Object {
+          |  public in com.acme.money.Amount amount = null;
+          |}
+          |ruleset AmountRules (AmountRules) {
+          |  rule `divide` { when {} then { amount.divideInternal(amount); amount.divideInternal(amount); } }
+          |}
+          |""".stripMargin
+      val mapping =
+        """<?xml version="1.0"?>
+          |<translation><lang>ARL</lang><class>
+          |  <businessName>com.acme.money.Amount</businessName>
+          |  <method><name>divideInternal</name>
+          |    <parameter type="com.acme.money.Amount"/>
+          |    <body language="arl"><![CDATA[this.result = value;]]></body>
+          |  </method>
+          |</class></translation>
+          |""".stripMargin
+      val (cpg, b2xPath) =
+        buildWithMapping(arl, mapping, _.withXomSrcPaths(Set(xomDir.toString)), validateCpg = false)
+      try {
+        val fullName = "com.acme.money.Amount.divideInternal:com.acme.money.Amount(com.acme.money.Amount)"
+        val method   = cpg.method.fullNameExact(fullName).head
+        val calls    = cpg.call.nameExact("divideInternal").l
+
+        cpg.method.fullNameExact(fullName).size shouldBe 1
+        method.filename should endWith("com/acme/money/Amount.java")
+        calls.size shouldBe 2
+        calls.foreach { call =>
+          call.methodFullName shouldBe fullName
+          call.signature shouldBe "com.acme.money.Amount(com.acme.money.Amount)"
+          call.typeFullName shouldBe "com.acme.money.Amount"
+          call.callee(NoResolve).id.l shouldBe List(method.id)
+          tags(call, ArlTags.Writes) should contain("amount.result")
+
+          val memberFinding = findingsForCall(cpg, Codes.B2xMember, call).head
+          ArlFindings.value(memberFinding, "returnTypeSource") shouldBe "xom"
+          val shadowFinding = findingsForCall(cpg, Codes.B2xShadowsMethod, call).head
+          ArlFindings.value(shadowFinding, ArlFindings.Keys.Severity) shouldBe "unresolved"
+          ArlFindings.value(shadowFinding, "b2xFile") shouldBe b2xPath.toString
+          ArlFindings.value(shadowFinding, "b2xMember") shouldBe fullName
+          ArlFindings.value(shadowFinding, "shadowedMethodFile") shouldBe method.filename
+          ArlFindings.value(shadowFinding, ArlFindings.Keys.Message) should include(
+            "replaces the Java method at runtime"
+          )
+          findingsForCall(cpg, Codes.B2xReturnTypeUnknown, call) shouldBe empty
+        }
+      } finally cpg.close()
+    }
+
+    "fall back to a BOM method return type when the mapping omits one" in {
+      val dir = Files.createTempDirectory("arl2cpg-b2x-signature-bom")
+      tmpDirs ::= dir
+      val bom = dir.resolve("bigdecimal.bom")
+      Files.writeString(
+        bom,
+        """package java.math;
+          |class BigDecimal {
+          |  java.math.BigDecimal divideInternal(java.math.BigDecimal value);
+          |}
+          |""".stripMargin
+      )
+      val (cpg, _) =
+        buildWithMapping(signatureArl, bigDecimalMapping(""), _.withBomPaths(Seq(bom.toString)))
+      try {
+        val call = divideCall(cpg)
+        call.methodFullName shouldBe
+          "java.math.BigDecimal.divideInternal:java.math.BigDecimal(java.math.BigDecimal)"
+        call.signature shouldBe "java.math.BigDecimal(java.math.BigDecimal)"
+        call.typeFullName shouldBe "java.math.BigDecimal"
+        ArlFindings.value(findingsForCall(cpg, Codes.B2xMember, call).head, "returnTypeSource") shouldBe "bom"
+        findingsForCall(cpg, Codes.B2xReturnTypeUnknown, call) shouldBe empty
+      } finally cpg.close()
+    }
+
+    "report empty and duplicate returnType elements as unmodelled" in {
+      val duplicate = "<returnType>java.math.BigDecimal</returnType>"
+      val (cpg, _) =
+        buildWithMapping(signatureArl, bigDecimalMapping(s"<returnType/>$duplicate"), _.withAllowUnknown(true))
+      try {
+        val unmodelled = ArlFindings.findings(cpg, Codes.B2xUnmodelledElement)
+        unmodelled.map(ArlFindings.reason).toSet shouldBe
+          Set("method/returnType-empty", "method/returnType-duplicate")
+        val call = divideCall(cpg)
+        ArlFindings.value(findingsForCall(cpg, Codes.B2xMember, call).head, "returnTypeSource") shouldBe "none"
+        findingsForCall(cpg, Codes.B2xReturnTypeUnknown, call) should have size 1
+      } finally cpg.close()
+    }
+
+    "report calls whose B2X method has no known return type" in {
+      val callsWithoutType = calls(withB2x, "outcome", "rejectWith", 2)
+      callsWithoutType should not be empty
+      val callIds         = callsWithoutType.map(_.id().toString).toSet
+      val memberFindings  =
+        ArlFindings.findings(withB2x, Codes.B2xMember)
+          .filter(f => callIds.contains(ArlFindings.value(f, ArlFindings.Keys.CallId)))
+      val returnFindings =
+        ArlFindings.findings(withB2x, Codes.B2xReturnTypeUnknown)
+          .filter(f => callIds.contains(ArlFindings.value(f, ArlFindings.Keys.CallId)))
+      memberFindings.size shouldBe callsWithoutType.size
+      returnFindings.size shouldBe callsWithoutType.size
+      callsWithoutType.foreach { call =>
+        call.methodFullName shouldBe
+          "com.acme.loan.model.Outcome.rejectWith:ANY(com.acme.loan.model.Reason,int)"
+        call.signature shouldBe "ANY(com.acme.loan.model.Reason,int)"
+        call.typeFullName shouldBe "ANY"
+        val memberFinding = findingsForCall(withB2x, Codes.B2xMember, call).head
+        ArlFindings.value(memberFinding, ArlFindings.Keys.Severity) shouldBe "info"
+        ArlFindings.value(memberFinding, "returnTypeSource") shouldBe "none"
+        val returnTypeFinding = findingsForCall(withB2x, Codes.B2xReturnTypeUnknown, call).head
+        ArlFindings.value(returnTypeFinding, ArlFindings.Keys.Severity) shouldBe "unresolved"
+        ArlFindings.value(returnTypeFinding, "b2xFile") shouldBe loanB2x.toString
+        ArlFindings.value(returnTypeFinding, "b2xMember") shouldBe call.methodFullName
+        ArlFindings.value(returnTypeFinding, "returnTypeSource") shouldBe "none"
+        ArlFindings.value(returnTypeFinding, ArlFindings.Keys.Message) should include(
+          "com.acme.loan.model.Outcome.rejectWith(com.acme.loan.model.Reason,int)"
+        )
+      }
+    }
+
     "connect normal completion in B2X function bodies to METHOD_RETURN" in {
       val cpg = build(_.withB2xPath(loanB2x.toString))
       try {
@@ -174,7 +391,7 @@ class B2xTests extends AnyWordSpec with Matchers with BeforeAndAfterAll {
       // test_without_the_mapping_the_same_call_is_reported_as_unresolved
       writers(withoutB2x, "outcome.rejected") shouldBe empty
       mayAffectReasons(withoutB2x, "rejectWith") shouldBe Set(Reasons.CalleeBodyNotInArtifact)
-      withoutB2x.method.fullName(".*:b2x.*").l shouldBe empty
+      withoutB2x.method.filter(_.filename == loanB2x.toString).l shouldBe empty
     }
   }
 
