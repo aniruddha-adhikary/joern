@@ -7,6 +7,7 @@ import io.shiftleft.semanticcpg.language.*
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
+import scala.util.{Failure, Success}
 
 class TaskIdentityTests extends Arl2CpgSuite {
 
@@ -52,6 +53,24 @@ flowtask Step ($p) { { } }
     rflDir.foreach(dir => config = config.withRflSrcPaths(Set(dir.toString)))
     new Arl2Cpg().createCpg(config).get
   }
+
+  private def taskIdentityFailure(input: Path, sidecar: Path): Throwable = {
+    val result = new Arl2Cpg().createCpg(
+      Config().withInputPath(input.toString).withTaskIdentityPaths(Set(sidecar.toString))
+    )
+    result match {
+      case Failure(exception) => exception
+      case Success(cpg)       =>
+        cpg.close()
+        fail(s"Expected --task-identity path '$sidecar' to fail")
+    }
+  }
+
+  private def causeMessages(exception: Throwable): String =
+    Iterator.iterate(exception: Throwable)(_.getCause)
+      .takeWhile(_ != null)
+      .flatMap(error => Option(error.getMessage))
+      .mkString("\n")
 
   private def writeRfls(entries: (String, String, String, List[String])*): Path = {
     val dir = Files.createTempDirectory("arl2cpg-rfl-test")
@@ -106,6 +125,37 @@ $tasks
     "carry the qualifiedName only on the record that has one" in {
       val qualified = cpg.method.name("DCS_Flow>Common").l.flatMap(m => annValue(m, "taskQualifiedName"))
       qualified.shouldBe(List("com.acme.dcs.Common"))
+    }
+  }
+
+  "--task-identity paths" should {
+    "load a symlinked directory and fail on missing or empty paths" in {
+      val sidecarDir = Files.createTempDirectory("arl2cpg-identity-directory")
+      Files.writeString(
+        sidecarDir.resolve("identity.jsonl"),
+        List(record(4, "DCS_Flow>Common", uuid1), record(5, "DCS_Flow>Common", uuid2)).mkString("", "\n", "\n"),
+        StandardCharsets.UTF_8
+      )
+      val symlinkRoot = Files.createTempDirectory("arl2cpg-identity-symlink").resolve("sidecars")
+      Files.createSymbolicLink(symlinkRoot, sidecarDir)
+
+      val cpg = arlCpg(twinArl, Some(symlinkRoot))
+      try {
+        cpg.method.name("DCS_Flow>Common").l.map(_.fullName).toSet shouldBe Set(
+          s"Twin.DCS_Flow>Common@$uuid1:void()",
+          s"Twin.DCS_Flow>Common@$uuid2:void()"
+        )
+      } finally cpg.close()
+
+      val input = Files.createTempDirectory("arl2cpg-identity-invalid-input")
+      Files.writeString(input.resolve("test.arl"), twinArl)
+      val missing = input.resolve("missing.jsonl")
+      val empty   = Files.createTempDirectory("arl2cpg-identity-empty")
+      List(missing, empty).foreach { path =>
+        val error = causeMessages(taskIdentityFailure(input, path))
+        error should include("--task-identity")
+        error should include(path.toString)
+      }
     }
   }
 

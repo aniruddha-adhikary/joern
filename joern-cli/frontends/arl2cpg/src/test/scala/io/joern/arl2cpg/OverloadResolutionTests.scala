@@ -1,5 +1,6 @@
 package io.joern.arl2cpg
 
+import io.joern.arl2cpg.passes.resolution.TypeModel
 import io.joern.x2cpg.frontendspecific.arl2cpg.ArlFindings
 import io.joern.x2cpg.frontendspecific.arl2cpg.ArlFindings.{Codes, Keys}
 import io.joern.x2cpg.Defines
@@ -233,6 +234,12 @@ ruleset R (S) {
           |    public static int nested(int value) { return value; }
           |  }
           |}
+          |""".stripMargin,
+      "jaronly/ClasspathOnly.java" ->
+        """package jaronly;
+          |public class ClasspathOnly {
+          |  public String answer() { return "ok"; }
+          |}
           |""".stripMargin
     )
     val sourceDir  = root.resolve("stub-sources")
@@ -330,6 +337,81 @@ ruleset R (S) {
       |  public String name;
       |}
       |""".stripMargin
+
+  "XOM body calls" should {
+
+    "resolve methods found only in inference JARs" in {
+      FileUtil.usingTemporaryDirectory("arl2cpg-xom-classpath") { dir =>
+        val (jar, _) = compileStubSources(dir)
+        withCpg(
+          "",
+          javaSources = Map(
+            "client/Caller.java" ->
+              """package client;
+                |public class Caller {
+                |  public String call(jaronly.ClasspathOnly value) { return value.answer(); }
+                |}
+                |""".stripMargin
+          ),
+          classpath = Seq(jar.toString)
+        ) { cpg =>
+          val xomCalls = cpg.call
+            .filter(call => call.file.name.headOption.exists(filename => !filename.endsWith(".arl")))
+            .filterNot(_.name.startsWith("<operator>"))
+            .l
+          val call = xomCalls.find(_.name == "answer").get
+          call.methodFullName shouldBe "jaronly.ClasspathOnly.answer:java.lang.String()"
+          ArlFindings
+            .findings(cpg, Codes.UnresolvedCallTarget)
+            .filter(finding => ArlFindings.value(finding, Keys.CallId) == call.id().toString) shouldBe empty
+        }
+      }
+    }
+
+    "report unresolved calls with XOM method evidence" in withCpg(
+      "",
+      javaSources = Map(
+        "client/UnknownCalls.java" ->
+          """package client;
+            |public class UnknownCalls {
+            |  public void check() { unknown.Thing.go(); }
+            |}
+            |""".stripMargin
+      )
+    ) { cpg =>
+      val call = cpg.call
+        .filter(call => call.file.name.headOption.exists(filename => !filename.endsWith(".arl")))
+        .find(_.name == "go")
+        .get
+      val findings = ArlFindings
+        .findings(cpg, Codes.UnresolvedCallTarget)
+        .filter(finding => ArlFindings.value(finding, Keys.CallId) == call.id().toString)
+      findings should have size 1
+      val finding = findings.head
+      ArlFindings.reason(finding) shouldBe "xom-body"
+      ArlFindings.value(finding, Keys.Severity) shouldBe "unresolved"
+      ArlFindings.value(finding, "method") shouldBe call.start
+        .repeat(_.astParent)(_.until(_.isMethod))
+        .isMethod
+        .fullName
+        .head
+      ArlFindings.value(finding, Keys.Filename) shouldBe call.file.name.head
+    }
+
+    "return a failure when an XOM source path cannot be imported" in {
+      FileUtil.usingTemporaryDirectory("arl2cpg-xom-import-failure") { dir =>
+        Files.writeString(dir.resolve("rules.arl"), ruleSource(""))
+        val missingXomPath = dir.resolve("missing-xom").toString
+        val failure = new Arl2Cpg()
+          .createCpg(Config().withInputPath(dir.toString).withXomSrcPaths(Set(missingXomPath)))
+          .failed
+          .get
+        failure shouldBe a[IllegalStateException]
+        failure.getMessage shouldBe s"Failed to import XOM sources from '$missingXomPath'"
+        failure.getCause shouldBe a[java.io.FileNotFoundException]
+      }
+    }
+  }
 
   "aggregate labels" should {
 
@@ -1097,6 +1179,70 @@ ruleset R (S) {
           cpg.call.nameExact("equalsIgnoreCase").l.map(_.methodFullName).distinct shouldBe
             List("java.lang.String.equalsIgnoreCase:boolean(java.lang.String)")
         } finally cpg.close()
+      }
+    }
+
+    "index jars nested under an XOM classpath directory" in {
+      FileUtil.usingTemporaryDirectory("arl2cpg-overload-nested-jar") { dir =>
+        val (jar, _) = compileStubSources(dir)
+        val classpathDir = Files.createDirectories(dir.resolve("classpath"))
+        Files.copy(jar, classpathDir.resolve("cp-util.jar"))
+
+        withCpgAt(
+          dir,
+          """CpUtil.objectCount(new Object[]{"a"});""",
+          Seq("import loan.CpUtil;"),
+          "",
+          Map.empty,
+          Seq(classpathDir.toString),
+          allowUnknown = true
+        ) { cpg =>
+          cpg.call.name("objectCount").head.methodFullName shouldBe
+            "loan.CpUtil.objectCount:int(java.lang.Object[])"
+        }
+      }
+    }
+
+    "fail on missing and unusable XOM classpath paths" in {
+      FileUtil.usingTemporaryDirectory("arl2cpg-overload-invalid-classpath") { dir =>
+        val inputDir = Files.createDirectories(dir.resolve("input"))
+        Files.writeString(inputDir.resolve("rules.arl"), ruleSource("int value = 1;"))
+        val missing = dir.resolve("missing-classpath")
+        val unusable = Files.createDirectories(dir.resolve("unusable-classpath"))
+        Files.writeString(unusable.resolve("README"), "no classes or jars")
+        val corruptJar = dir.resolve("corrupt.jar")
+        Files.writeString(corruptJar, "not a jar")
+        val nestedJarDir = Files.createDirectories(dir.resolve("classpath-with-corrupt-jar"))
+        val nestedCorruptJar = nestedJarDir.resolve("nested.jar")
+        Files.writeString(nestedCorruptJar, "not a jar")
+
+        List(
+          (missing, missing, Option.empty[Path]),
+          (unusable, unusable, Option.empty[Path]),
+          (corruptJar, corruptJar, Some(corruptJar)),
+          (nestedJarDir, nestedCorruptJar, Some(nestedCorruptJar))
+        ).foreach { case (classpathPath, expectedPath, unreadableJar) =>
+          val result = new Arl2Cpg().createCpg(
+            Config().withInputPath(inputDir.toString).withXomClasspath(Seq(classpathPath.toString))
+          )
+          val error = result.failed.get
+          val messages =
+            Iterator.iterate(error: Throwable)(_.getCause)
+              .takeWhile(_ != null)
+              .flatMap(exception => Option(exception.getMessage))
+              .mkString("\n")
+          messages should include("--xom-classpath")
+          messages should include(expectedPath.toString)
+          unreadableJar.foreach(path => messages should include(s"--xom-classpath jar '$path' is unreadable"))
+        }
+
+        List((corruptJar, corruptJar), (nestedJarDir, nestedCorruptJar)).foreach { case (classpathPath, jarPath) =>
+          val error = intercept[IllegalArgumentException] {
+            new TypeModel(Nil, Seq(classpathPath.toString))
+          }
+          error.getMessage shouldBe s"--xom-classpath jar '$jarPath' is unreadable"
+          error.getCause should not be null
+        }
       }
     }
 

@@ -11,7 +11,8 @@ import io.shiftleft.semanticcpg.language.*
   * skipped-BOM-file values are repeated key/value pairs and are declared list-valued in [[ListValuedKeys]]. Effects of
   * calls are TAG nodes on the CALL (see [[ArlTags]]). Neither ever replaces an AST node: the CPG stays a faithful
   * lowering, and the findings are the honest remainder — arlgraph's "never lose an edge, never guess" invariants
-  * (DESIGN.md §0) in CPG terms.
+  * (DESIGN.md §0) in CPG terms. Every unresolved Java call in an ARL expression or an XOM method body has an
+  * `unresolved-call-target` finding.
   */
 object ArlFindings {
 
@@ -52,8 +53,12 @@ object ArlFindings {
     val B2xReturnTypeUnknown = "b2x-return-type-unknown"
     val B2xShadowsMethod     = "b2x-shadows-method"
 
-    /** A Java call whose target could not be chosen from the receiver and static argument types. */
+    /** A Java call whose target could not be chosen from the receiver and static argument types, including XOM bodies.
+      */
     val UnresolvedCallTarget = "unresolved-call-target"
+
+    val XomFieldUnmatched = "xom-field-unmatched"
+    val XomSourceUnparsed = "xom-source-unparsed"
 
     val BomMember         = "bom-member"
     val BomTypeUnresolved = "bom-type-unresolved"
@@ -75,11 +80,12 @@ object ArlFindings {
     val B2xBodyCallsMethodWithoutBody = "b2x-body-calls-method-without-body"
   }
 
-  /** Severity mapping: `unknown-construct` and `syntax-error` are `error`; `unresolved-call-target`,
-    * `bom-type-unresolved`, `bom-duplicate-class`, `bom-include-missing`, `b2x-unmodelled-element`,
-    * `b2x-return-type-unknown`, and `b2x-shadows-method` are `unresolved`; `unresolved-call-effects` is `info` only for
-    * `callee-body-not-in-artifact` and `unresolved` otherwise; `b2x-member`, `bom-member`, and `bom-files-not-loaded`
-    * are `info`. An unknown code fails instead of receiving a default.
+  /** Severity mapping: `unknown-construct` and `syntax-error` are `error`; every `unresolved-call-target` (including
+    * reason `xom-body`), `bom-type-unresolved`, `bom-duplicate-class`, `bom-include-missing`, `b2x-unmodelled-element`,
+    * `b2x-return-type-unknown`, `b2x-shadows-method`, `xom-field-unmatched`, and `xom-source-unparsed` are
+    * `unresolved`; `unresolved-call-effects` is `info` only for `callee-body-not-in-artifact` and `unresolved`
+    * otherwise; `b2x-member`, `bom-member`, and `bom-files-not-loaded` are `info`. An unknown code fails instead of
+    * receiving a default.
     */
   private[arl2cpg] def severity(code: String, reason: String): String = (code, reason) match {
     case (Codes.UnknownConstruct | Codes.SyntaxError, _)                                  => "error"
@@ -90,6 +96,7 @@ object ArlFindings {
     case (Codes.B2xReturnTypeUnknown, _)                                                  => "unresolved"
     case (Codes.B2xShadowsMethod, _)                                                      => "unresolved"
     case (Codes.B2xMember, _)                                                             => "info"
+    case (Codes.XomFieldUnmatched | Codes.XomSourceUnparsed, _)                           => "unresolved"
     case (Codes.BomMember, _)                                                             => "info"
     case (Codes.BomFilesNotLoaded, _)                                                     => "info"
     case (Codes.BomTypeUnresolved | Codes.BomDuplicateClass | Codes.BomIncludeMissing, _) =>
@@ -137,7 +144,7 @@ object ArlFindings {
     cpg.finding.filter(f => ArlFindings.code(f) == code).l
 }
 
-/** TAG names attached to ARL CALL nodes to record what a call does to its receiver, and how we know. */
+/** TAG names attached to ARL CALL, Java MEMBER, and B2X METHOD nodes to record derived metadata. */
 object ArlTags {
 
   /** value: fullName of the B2X body METHOD the call resolves to. */
@@ -163,6 +170,18 @@ object ArlTags {
 
   /** value: `true` when an interval literal's upper bound is closed (`]`), otherwise `false`. */
   val IntervalUpperClosed = "ARL_INTERVAL_UPPER_CLOSED"
+
+  /** value: the exact source text of a Java field initializer. */
+  val InitializerCode = "ARL_INITIALIZER_CODE"
+
+  /** Literal kind recovered from a Java field initializer or B2X attribute getter body. */
+  val LiteralKind = "ARL_LITERAL_KIND"
+
+  /** Decoded literal value when available. */
+  val LiteralValue = "ARL_LITERAL_VALUE"
+
+  /** value: path of the B2X file that declares this getter METHOD as an attribute. */
+  val B2xAttribute = "ARL_B2X_ATTRIBUTE"
 
   def tag(builder: DiffGraphBuilder, node: AbstractNode, name: String, value: String): NewTag = {
     val tag = NewTag().name(name).value(value)

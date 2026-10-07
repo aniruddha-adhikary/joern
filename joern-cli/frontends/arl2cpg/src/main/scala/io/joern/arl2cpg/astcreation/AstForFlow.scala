@@ -249,7 +249,10 @@ trait AstForFlow {
       qualifiedScope(name).toList.filter(meta => calledTargets.forall(target => callAcceptable(meta, target)))
     } else {
       val id              = taskIdOf(name)
-      val taskListMatches = rflMeta.filter(meta => meta.taskIds.contains(id) || meta.taskIds.contains(name))
+      val taskListMatches = rflMeta.filter { meta =>
+        val ownIds = meta.taskIds -- meta.subflowTaskIds
+        ownIds.contains(id) || ownIds.contains(name)
+      }
       val nameOnlyMatches = rflMeta.filter(meta =>
         meta.name == name && !meta.taskIds.contains(id) && !meta.taskIds
           .contains(name)
@@ -413,6 +416,7 @@ trait AstForFlow {
           name = rec.qualifiedName.getOrElse(rec.uuid),
           uuid = rec.uuid,
           taskIds = identityTasks,
+          subflowTaskIds = Set.empty,
           subflowTargets = Map.empty,
           path = rec.path
         )

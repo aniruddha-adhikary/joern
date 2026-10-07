@@ -69,7 +69,7 @@ ruleset R (S) {
     "export loan XOM, findings, references, literal types, and JDK callees" in {
       withLoanCpg { cpg =>
         val json = ujson.read(ArlExport.toJson(cpg, "loan-rules.cpg"))
-        json.obj.keys.toList.shouldBe(List("cpgFile", "methods", "types", "findings"))
+        json.obj.keys.toList.shouldBe(List("cpgFile", "methods", "types", "b2xAttributes", "findings"))
         json("cpgFile").str.shouldBe("loan-rules.cpg")
 
         val methods    = json("methods").arr

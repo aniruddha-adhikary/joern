@@ -8,8 +8,10 @@ import io.joern.arl2cpg.passes.{
   FindingsPass,
   MissingTypeNodePass,
   ParseDiagnostics,
+  XomFieldInitializerPass,
   XomLinkerPass,
-  XomMethodKindPass
+  XomMethodKindPass,
+  XomUnresolvedCallsPass
 }
 import io.joern.javasrc2cpg.{Config as JavaSrcConfig}
 import io.joern.javasrc2cpg.passes.{AstCreationPass as JavaSrcAstCreationPass, OuterClassRefPass, TypeInferencePass}
@@ -47,15 +49,21 @@ class Arl2Cpg extends X2CpgFrontend {
       val diagnostics = new ParseDiagnostics
       MetaDataPass(cpg, Language, config.inputPath).createAndApply()
       new AstCreationPass(cpg, config, diagnostics)(config.schemaValidation).createAndApply()
-      config.xomSrcPaths.toSeq.sorted.foreach(runJavasrcPasses(cpg, _))
+      config.xomSrcPaths.toSeq.sorted.foreach { xomSrcDir =>
+        runJavasrcPasses(cpg, xomSrcDir, config.xomClasspath)
+      }
       if (config.xomSrcPaths.nonEmpty) {
         new XomMethodKindPass(cpg).createAndApply()
+        new XomFieldInitializerPass(cpg, config.xomSrcPaths).createAndApply()
       }
       new MissingTypeNodePass(cpg, None).createAndApply()
       if (
         config.xomSrcPaths.nonEmpty || config.xomClasspath.nonEmpty || config.bomPaths.nonEmpty || config.bomRoots.nonEmpty
       ) {
         new XomLinkerPass(cpg, config.xomClasspath, b2x, bom).createAndApply()
+      }
+      if (config.xomSrcPaths.nonEmpty) {
+        new XomUnresolvedCallsPass(cpg).createAndApply()
       }
       new B2xEffectsPass(cpg, b2x, config.xomClasspath, bom).createAndApply()
       new FindingsPass(cpg, diagnostics, config.allowUnknown).createAndApply()
@@ -72,11 +80,12 @@ class Arl2Cpg extends X2CpgFrontend {
   }
 
   /** Runs javasrc2cpg's passes for the XOM sources into the same CPG, mirroring `JavaSrc2Cpg.createCpg` minus the
-    * MetaDataPass (metadata stays `ODMARL`).
+    * MetaDataPass (metadata stays `ODMARL`). Classpath entries are supplied as inference JAR paths; javasrc scans JARs
+    * and JARs under directories, but bare class directories without JARs are not usable for type solving.
     */
-  private def runJavasrcPasses(cpg: Cpg, xomSrcDir: String): Unit = {
+  private def runJavasrcPasses(cpg: Cpg, xomSrcDir: String, xomClasspath: Seq[String]): Unit = {
     Try {
-      val javaConfig      = JavaSrcConfig().withInputPath(xomSrcDir)
+      val javaConfig      = JavaSrcConfig().withInputPath(xomSrcDir).withInferenceJarPaths(xomClasspath.toSet)
       val astCreationPass = new JavaSrcAstCreationPass(javaConfig, cpg)
       astCreationPass.createAndApply()
       astCreationPass.sourceParser.cleanupDelombokOutput()
@@ -87,7 +96,7 @@ class Arl2Cpg extends X2CpgFrontend {
       new TypeInferencePass(cpg).createAndApply()
     } match {
       case scala.util.Failure(exception) =>
-        logger.warn(s"Failed to import XOM sources from '$xomSrcDir'", exception)
+        throw new IllegalStateException(s"Failed to import XOM sources from '$xomSrcDir'", exception)
       case scala.util.Success(_) =>
         logger.debug(s"Imported XOM sources from '$xomSrcDir'")
     }

@@ -420,7 +420,7 @@ class ArlCfgExportTests extends Arl2CpgSuite() {
           .should(contain("rule"))
 
         val root = ujson.read(ArlExport.toJson(cpg, "arl-export.cpg"))
-        root.obj.keys.toList.shouldBe(List("cpgFile", "methods", "types", "findings"))
+        root.obj.keys.toList.shouldBe(List("cpgFile", "methods", "types", "b2xAttributes", "findings"))
         root("cpgFile").str.shouldBe("arl-export.cpg")
         root("methods").arr.foreach(method => method.obj.keys.toList.should(contain("arlKind")))
         val exportedUnknown = root("methods").arr.filter(_("arlKind").str == "unknown").map(_("fullName").str).sorted

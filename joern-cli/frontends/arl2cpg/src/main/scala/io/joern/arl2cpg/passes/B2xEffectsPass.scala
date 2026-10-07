@@ -1,5 +1,15 @@
 package io.joern.arl2cpg.passes
 
+import com.github.javaparser.StaticJavaParser
+import com.github.javaparser.ast.expr.{
+  CharLiteralExpr,
+  Expression as JavaParserExpression,
+  IntegerLiteralExpr,
+  LongLiteralExpr,
+  StringLiteralExpr
+}
+import io.joern.arl2cpg.astcreation.AstForExpressions
+import io.joern.arl2cpg.parser.ARLParser
 import io.joern.x2cpg.frontendspecific.arl2cpg.ArlFindings
 import io.joern.x2cpg.frontendspecific.arl2cpg.ArlFindings.{Codes, Reasons}
 import io.joern.arl2cpg.ArlAnnotations
@@ -21,8 +31,12 @@ import io.shiftleft.codepropertygraph.generated.{
 }
 import io.shiftleft.passes.CpgPass
 import io.shiftleft.semanticcpg.language.*
+import org.antlr.v4.runtime.ParserRuleContext
+import org.antlr.v4.runtime.tree.ParseTree
 
 import scala.collection.mutable
+import scala.jdk.CollectionConverters.*
+import scala.util.Try
 
 /** Resolves the effects of ARL calls on business objects through the archive's B2X mapping. Ported from arlgraph
   * `Lowering.b2xEffects` / `candidates` / `emitB2xEffects`.
@@ -46,6 +60,7 @@ class B2xEffectsPass(
 ) extends CpgPass(cpg) {
 
   private final case class ReturnTypeDecision(value: String, source: String)
+  private final case class AttributeLiteral(kind: String, value: Option[String])
   private final case class BodyMethodDecision(
     fullName: String,
     signature: String,
@@ -53,15 +68,20 @@ class B2xEffectsPass(
     shadowedMethodFile: Option[String]
   )
 
-  private val bodyMethods: mutable.Map[String, BodyMethodDecision]     = mutable.Map.empty
-  private val bodyReturnTypes: mutable.Map[String, ReturnTypeDecision] = mutable.Map.empty
+  private val bodyMethods: mutable.Map[String, BodyMethodDecision]      = mutable.Map.empty
+  private val bodyReturnTypes: mutable.Map[String, ReturnTypeDecision]  = mutable.Map.empty
+  private val attributeMethods: mutable.Map[String, BodyMethodDecision] = mutable.Map.empty
+  private val generatedAttributeMethods: mutable.Map[String, NewMethod] = mutable.Map.empty
 
   private lazy val typeModel =
     new TypeModel(cpg.typeDecl.isExternal(false).filenameNot(".*\\.arl$").l, xomClasspath, bom)
   private lazy val methodsByFullName: Map[String, Method] = cpg.method.l.map(method => method.fullName -> method).toMap
 
   override def run(builder: DiffGraphBuilder): Unit = {
-    b2x.foreach(model => reportUnhandled(builder, model))
+    b2x.foreach { model =>
+      reportUnhandled(builder, model)
+      model.members.filter(_.kind == "getter").foreach(attributeMethod(builder, model, _))
+    }
 
     val javaTypeDecls = cpg.typeDecl.isExternal(false).filenameNot(".*\\.arl$").l
     val byFullName    = javaTypeDecls.map(td => td.fullName -> td).toMap
@@ -209,6 +229,192 @@ class B2xEffectsPass(
     }
   }
 
+  private def attributeMethod(builder: DiffGraphBuilder, model: B2xModel, member: B2xMember): BodyMethodDecision =
+    attributeMethods.getOrElseUpdate(
+      member.key, {
+        val returnType = member.returnType.getOrElse(Defines.Any)
+        val fullName   = B2xEffectsPass.bodyFullName(member, returnType)
+        val signature  = B2xEffectsPass.signature(member, returnType)
+        val literal    = attributeLiteral(member.body)
+        methodsByFullName.get(fullName) match {
+          case Some(existing) =>
+            ArlTags.tag(builder, existing, ArlTags.B2xAttribute, model.path)
+            literal.foreach(addLiteralTags(builder, existing, _))
+            if (member.returnType.isEmpty) {
+              reportUnknownAttributeType(builder, existing, model, member, fullName)
+            }
+            ArlFindings.finding(
+              builder,
+              Some(existing),
+              Codes.B2xShadowsMethod,
+              Codes.B2xShadowsMethod,
+              "The B2X body replaces the Java method at runtime, while the METHOD represents the Java body that is not executed.",
+              model.path,
+              existing.lineNumber,
+              List("b2xFile" -> model.path, "b2xMember" -> fullName, "shadowedMethodFile" -> existing.filename)
+            )
+            BodyMethodDecision(existing.fullName, existing.signature, Left(existing), Some(existing.filename))
+          case None =>
+            generatedAttributeMethods.get(fullName) match {
+              case Some(existing) =>
+                BodyMethodDecision(existing.fullName, existing.signature, Right(existing), None)
+              case None =>
+                val method = NewMethod()
+                  .name(member.name)
+                  .fullName(fullName)
+                  .signature(signature)
+                  .code(member.body)
+                  .filename(model.path)
+                  .astParentType(NodeTypes.TYPE_DECL)
+                  .astParentFullName(member.businessClass)
+                  .isExternal(false)
+                val thisParam = NewMethodParameterIn()
+                  .name("this")
+                  .code("this")
+                  .index(0)
+                  .order(0)
+                  .typeFullName(member.businessClass)
+                  .evaluationStrategy(EvaluationStrategies.BY_REFERENCE)
+                val block = NewBlock().code(member.body).typeFullName(Defines.Any).order(1)
+                val ret   = NewMethodReturn()
+                  .code("RET")
+                  .typeFullName(returnType)
+                  .evaluationStrategy(EvaluationStrategies.BY_VALUE)
+                  .order(3)
+                builder.addNode(method)
+                ArlTags.tag(builder, method, ArlTags.B2xAttribute, model.path)
+                builder.addNode(thisParam)
+                builder.addEdge(method, thisParam, EdgeTypes.AST)
+                builder.addNode(block)
+                builder.addEdge(method, block, EdgeTypes.AST)
+                ArlAnnotations.addValue(builder, method, "arlKind", "b2x-attribute", 2)
+                builder.addNode(ret)
+                builder.addEdge(method, ret, EdgeTypes.AST)
+                literal.foreach(addLiteralTags(builder, method, _))
+                if (member.returnType.isEmpty) {
+                  reportUnknownAttributeType(builder, method, model, member, fullName)
+                }
+                generatedAttributeMethods(fullName) = method
+                BodyMethodDecision(fullName, signature, Right(method), None)
+            }
+        }
+      }
+    )
+
+  private def reportUnknownAttributeType(
+    builder: DiffGraphBuilder,
+    method: Method,
+    model: B2xModel,
+    member: B2xMember,
+    fullName: String
+  ): Unit =
+    ArlFindings.finding(
+      builder,
+      Some(method),
+      Codes.B2xReturnTypeUnknown,
+      Codes.B2xReturnTypeUnknown,
+      s"Return type is unavailable for B2X attribute ${member.key}",
+      model.path,
+      method.lineNumber,
+      List("b2xFile" -> model.path, "b2xMember" -> fullName)
+    )
+
+  private def reportUnknownAttributeType(
+    builder: DiffGraphBuilder,
+    method: NewMethod,
+    model: B2xModel,
+    member: B2xMember,
+    fullName: String
+  ): Unit =
+    ArlFindings.finding(
+      builder,
+      Some(method),
+      Codes.B2xReturnTypeUnknown,
+      Codes.B2xReturnTypeUnknown,
+      s"Return type is unavailable for B2X attribute ${member.key}",
+      model.path,
+      None,
+      List("b2xFile" -> model.path, "b2xMember" -> fullName)
+    )
+
+  private def attributeLiteral(body: String): Option[AttributeLiteral] =
+    B2xEffects.parseBody(body).flatMap { block =>
+      block.statement().asScala.toList match {
+        case statement :: Nil if statement.getStart.getText == "return" && statement.expression() != null =>
+          singleLiteral(statement.expression()).flatMap { case (literal, negative) =>
+            val kind    = AstForExpressions.literalKind(literal)
+            val numeric = Set("int", "long", "float", "double").contains(kind)
+            if (negative && !numeric) None
+            else {
+              decodedLiteralValue(literal, kind).map { value =>
+                AttributeLiteral(kind, value.map(value => if (negative) s"-$value" else value))
+              }
+            }
+          }
+        case _ => None
+      }
+    }
+
+  private def singleLiteral(expression: ARLParser.ExpressionContext): Option[(ARLParser.LiteralContext, Boolean)] = {
+    def unwrap(tree: ParseTree): Option[(ARLParser.LiteralContext, Boolean)] = tree match {
+      case literal: ARLParser.LiteralContext => Some(literal -> false)
+      case unary: ARLParser.UnaryContext     =>
+        val children = (0 until unary.getChildCount).map(unary.getChild).toList
+        children match {
+          case operator :: operand :: Nil if operator.getText == "-" =>
+            unwrap(operand)
+              .filter { case (literal, negative) =>
+                !negative && Set("int", "long", "float", "double").contains(AstForExpressions.literalKind(literal))
+              }
+              .map { case (literal, _) => literal -> true }
+          case child :: Nil => unwrap(child)
+          case _            => None
+        }
+      case context: ParserRuleContext if context.getChildCount == 1 => unwrap(context.getChild(0))
+      case _                                                        => None
+    }
+    unwrap(expression)
+  }
+
+  private def decodedLiteralValue(literal: ARLParser.LiteralContext, kind: String): Option[Option[String]] = {
+    def parsedExpression: Option[JavaParserExpression] =
+      Try(StaticJavaParser.parseExpression(literal.getText): JavaParserExpression).toOption
+
+    kind match {
+      case "null"    => Some(None)
+      case "boolean" => Some(Some(literal.getText))
+      case "string"  =>
+        parsedExpression
+          .collect { case value: StringLiteralExpr => Some(value.asString()) }
+      case "char" =>
+        parsedExpression
+          .collect { case value: CharLiteralExpr => Some(value.asChar().toString) }
+      case "int" =>
+        parsedExpression
+          .collect { case value: IntegerLiteralExpr => Some(value.asNumber().toString) }
+      case "long" =>
+        parsedExpression
+          .collect { case value: LongLiteralExpr => Some(value.asNumber().toString) }
+      case "double" | "float" =>
+        val text  = literal.getText
+        val value =
+          if (text.lastOption.exists(character => "fFdD".contains(character))) text.dropRight(1)
+          else text
+        Some(Some(value))
+      case _ => None
+    }
+  }
+
+  private def addLiteralTags(builder: DiffGraphBuilder, method: Method, literal: AttributeLiteral): Unit = {
+    ArlTags.tag(builder, method, ArlTags.LiteralKind, literal.kind)
+    literal.value.foreach(value => ArlTags.tag(builder, method, ArlTags.LiteralValue, value))
+  }
+
+  private def addLiteralTags(builder: DiffGraphBuilder, method: NewMethod, literal: AttributeLiteral): Unit = {
+    ArlTags.tag(builder, method, ArlTags.LiteralKind, literal.kind)
+    literal.value.foreach(value => ArlTags.tag(builder, method, ArlTags.LiteralValue, value))
+  }
+
   /** One target per B2X body, whatever the number of call sites that resolve to it. */
   private def bodyMethod(
     builder: DiffGraphBuilder,
@@ -222,6 +428,9 @@ class B2xEffectsPass(
         methodsByFullName.get(fullName) match {
           case Some(existing) =>
             BodyMethodDecision(existing.fullName, existing.signature, Left(existing), Some(existing.filename))
+          case None if generatedAttributeMethods.contains(fullName) =>
+            val existing = generatedAttributeMethods(fullName)
+            BodyMethodDecision(existing.fullName, existing.signature, Right(existing), None)
           case None =>
             val signature = B2xEffectsPass.signature(member, returnType.value)
             val method    = NewMethod()

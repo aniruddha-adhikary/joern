@@ -8,6 +8,7 @@ bomItem
     : includeDecl
     | packageDecl
     | propertyDecl
+    | annotationDecl
     | typeDecl
     ;
 
@@ -262,6 +263,12 @@ name
     | 'object'
     | 'string'
     | 'default'
+    | 'domain'
+    | 'property'
+    | 'operator'
+    | 'readonly'
+    | 'writeonly'
+    | 'include'
     ;
 
 stringLiteral
