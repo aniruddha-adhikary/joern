@@ -1,6 +1,7 @@
 package io.joern.arl2cpg
 
 import io.joern.arl2cpg.testfixtures.Arl2CpgSuite
+import io.joern.x2cpg.frontendspecific.arl2cpg.ArlExport
 import io.shiftleft.codepropertygraph.generated.Cpg
 import io.shiftleft.codepropertygraph.generated.nodes.Method
 import io.shiftleft.semanticcpg.language.*
@@ -112,6 +113,19 @@ ruletask Amended (ctx) { ordering: natural; rules : r.*; }
         .l
         .shouldBe(List(s"Twin.Step@$uuid2:void()"))
     }
+
+    "export distinct scoped fullNames without twin ordinals" in {
+      val root  = ujson.read(ArlExport.toJson(cpg, "rfl-scoped.cpg"))
+      val mains = root("methods").arr.filter(_("name").str == "Main").toList
+      mains.size.shouldBe(2)
+      mains.map(_("fullName").str).toSet.shouldBe(
+        Set(s"Twin.Main@$uuid1:void()", s"Twin.Main@$uuid2:void()")
+      )
+      mains.foreach { method =>
+        method("stableKey").str.contains("#").shouldBe(false)
+        method("nodes").arr.foreach(_.obj.contains("stableKey").shouldBe(false))
+      }
+    }
   }
 
   "indistinguishable twin bodies" should {
@@ -127,6 +141,21 @@ ruletask Amended (ctx) { ordering: natural; rules : r.*; }
       mains.size.shouldBe(2)
       mains.map(_.fullName).toSet.shouldBe(Set("Twin.Main:void()"))
       mains.map(scopeOf).toSet.shouldBe(Set("ambiguous"))
+    }
+
+    "export indistinguishable methods with source-ordered stable keys" in {
+      val root  = ujson.read(ArlExport.toJson(cpg, "rfl-twins.cpg"))
+      val mains = root("methods").arr
+        .filter(_("name").str == "Main")
+        .sortBy(_("line").num)
+        .toList
+      mains.size.shouldBe(2)
+      mains.map(_("stableKey").str.takeRight(2)).shouldBe(List("#0", "#1"))
+      mains.map(_("stableId").str).distinct.size.shouldBe(2)
+      mains.foreach { method =>
+        val nodeStableIds = method("nodes").arr.map(_("stableId").str).toList
+        nodeStableIds.distinct.shouldBe(nodeStableIds)
+      }
     }
   }
 

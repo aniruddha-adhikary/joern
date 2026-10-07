@@ -45,6 +45,27 @@ ruleset R (S) {
   private val bundledNames =
     Seq("branch", "chain", "forkjoin", "loop", "modes", "prio", "select", "subflow", "upd", "xcheck")
 
+  private lazy val branchHeader =
+    Using.resource(Source.fromResource("arl/branch.arl"))(_.getLines().take(19).mkString("\n"))
+  private lazy val branchSource =
+    Using.resource(Source.fromResource("arl/branch.arl"))(_.mkString)
+
+  private def unknownCallsSource(ruleCount: Int): String = {
+    val rules = (0 until ruleCount).map { index =>
+      s"""rule `probe.r$index` {
+         |  when {
+         |    Borrower() from borrower;
+         |    evaluate ( borrower.noSuchMethod$index() );
+         |  }
+         |  then {
+         |    score = Integer.valueOf(1);
+         |  }
+         |}
+         |""".stripMargin
+    }
+    s"$branchHeader\n${rules.mkString("\n")}\n}\n"
+  }
+
   private def withClasspathJar(root: Path): Path = {
     val source = root.resolve("classpath-src/loan/ClasspathProbe.java")
     Files.createDirectories(source.getParent)
@@ -202,6 +223,73 @@ ruleset R (S) {
       }
     }
 
+    "preserve stable keys for non-twin methods" in {
+      FileUtil.usingTemporaryDirectory("arl2cpg-stable-id-non-twin") { dir =>
+        val inputDir = dir.resolve("input")
+        Files.createDirectories(inputDir)
+        Files.writeString(inputDir.resolve("loan-rules.arl"), loanSource)
+        val root   = exportJson(inputDir)
+        val method = root("methods").arr.find(_("name").str == "r.first").get
+        val key    = s"METHOD:${method("fullName").str}@loan-rules.arl"
+        method("stableKey").str.shouldBe(key)
+        method("stableKey").str.contains("#").shouldBe(false)
+        method("stableId").str.shouldBe(stableIdForKey(key))
+      }
+    }
+
+    "export duplicate computationFlow methods with source-ordered stable keys in every configuration" in {
+      FileUtil.usingTemporaryDirectory("arl2cpg-stable-id-twins") { dir =>
+        val inputDir = dir.resolve("input")
+        Files.createDirectories(inputDir)
+        val duplicate =
+          """flowtask computationFlow($EngineData){
+            |  {
+            |    call task : computationFlow>computation;
+            |  }
+            |}
+            |""".stripMargin
+        Files.writeString(inputDir.resolve("branch.arl"), s"$branchSource\n$duplicate")
+        val classpathJar = withClasspathJar(dir)
+
+        def exportedTwins(root: ujson.Value): List[(String, String, List[String])] =
+          root("methods").arr
+            .filter(_("name").str == "computationFlow")
+            .sortBy(_("stableKey").str)
+            .map { method =>
+              (
+                method("stableKey").str,
+                method("stableId").str,
+                method("nodes").arr.map(_("stableId").str).toList.sorted
+              )
+            }
+            .toList
+
+        val base     = exportJson(inputDir)
+        val withJar  = exportJson(inputDir, Seq(classpathJar.toString))
+        val withB2x  = exportJson(inputDir, withB2x = true)
+        val withBoth = exportJson(inputDir, Seq(classpathJar.toString), withB2x = true)
+
+        val twins = base("methods").arr
+          .filter(_("name").str == "computationFlow")
+          .sortBy(_("line").num)
+          .toList
+        twins.size.shouldBe(2)
+        twins.map(_("stableKey").str.takeRight(2)).shouldBe(List("#0", "#1"))
+        twins.map(_("stableId").str).distinct.size.shouldBe(2)
+        twins.foreach { method =>
+          val nodeStableIds = method("nodes").arr.map(_("stableId").str).toList
+          nodeStableIds.distinct.shouldBe(nodeStableIds)
+          method("nodes").arr.foreach(_.obj.contains("stableKey").shouldBe(false))
+        }
+        val allNodeStableIds = twins.flatMap(method => method("nodes").arr.map(_("stableId").str))
+        allNodeStableIds.distinct.size.shouldBe(allNodeStableIds.size)
+
+        exportedTwins(withJar).shouldBe(exportedTwins(base))
+        exportedTwins(withB2x).shouldBe(exportedTwins(base))
+        exportedTwins(withBoth).shouldBe(exportedTwins(base))
+      }
+    }
+
     "keep other rules stable when a statement is inserted into one rule" in {
       FileUtil.usingTemporaryDirectory("arl2cpg-stable-id-edit") { dir =>
         val inputDir = dir.resolve("input")
@@ -217,6 +305,23 @@ ruleset R (S) {
         Files.writeString(inputFile, edited)
         val after = stableIdsInRule(exportJson(inputDir), "r.second")
         after.shouldBe(before)
+      }
+    }
+
+    "export 4,000 unresolved-call findings in under 30 seconds" in {
+      FileUtil.usingTemporaryDirectory("arl2cpg-export-scale") { dir =>
+        val inputDir = dir.resolve("input")
+        Files.createDirectories(inputDir)
+        Files.writeString(inputDir.resolve("scale.arl"), unknownCallsSource(4000))
+        val cpg = createCpg(inputDir)
+        try {
+          val started = System.nanoTime()
+          val root    = ujson.read(ArlExport.toJson(cpg, "scale.cpg"))
+          val seconds = (System.nanoTime() - started).toDouble / 1_000_000_000d
+          info(f"4,000-rule ARL export completed in $seconds%.3f seconds")
+          root("findings").arr.size should be >= 4000
+          seconds should be < 30.0
+        } finally cpg.close()
       }
     }
 

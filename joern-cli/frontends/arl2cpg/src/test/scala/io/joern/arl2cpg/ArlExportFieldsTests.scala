@@ -74,7 +74,19 @@ ruleset R (S) {
 
         val methods    = json("methods").arr
         val methodKeys =
-          List("id", "stableId", "name", "fullName", "signature", "filename", "line", "lineEnd", "arlKind", "nodes")
+          List(
+            "id",
+            "stableId",
+            "stableKey",
+            "name",
+            "fullName",
+            "signature",
+            "filename",
+            "line",
+            "lineEnd",
+            "arlKind",
+            "nodes"
+          )
         methods.foreach { method =>
           method.obj.keys.toList.shouldBe(methodKeys)
           method("id").num
