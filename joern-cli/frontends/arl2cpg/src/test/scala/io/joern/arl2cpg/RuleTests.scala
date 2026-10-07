@@ -187,7 +187,6 @@ ruleset IlrContext (EngineDataClass){
         val config = Config()
           .withInputPath(inputDir.toString)
           .withXomSrcPaths(Set(xomDir.toString))
-          .withAllowUnknown(true)
         val cpg = new Arl2Cpg().createCpg(config).get
         try {
           val collectLocal = cpg.local.nameExact("collect_class_1").head
