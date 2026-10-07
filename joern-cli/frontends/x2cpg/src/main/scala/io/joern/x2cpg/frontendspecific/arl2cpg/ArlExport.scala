@@ -31,8 +31,9 @@ import scala.collection.mutable
   * `filename`, `line`, `lineEnd`, `arlKind`, and `nodes` (sorted by id); types are sorted by `(fullName, id)` and
   * contain `id`, `stableId`, `name`, `fullName`, `file`, sorted `inherits`, and `members` sorted by `(name, id)` with
   * `id`, `stableId`, `name`, `typeFullName`, `code`, and `line`; findings are sorted by node id and contain sorted
-  * key/value fields, with duplicate non-list-valued keys rejected. `candidates` is a sorted JSON array, always present
-  * on `unresolved-call-target` findings; `bomFiles` is a JSON array on `bom-files-not-loaded` findings. Findings with
+  * key/value fields, with duplicate non-list-valued keys rejected. Every unresolved call in ARL and XOM method bodies
+  * has an `unresolved-call-target` finding. `candidates` is a sorted JSON array on ARL-side findings; XOM-body
+  * findings have reason `xom-body`. `bomFiles` is a JSON array on `bom-files-not-loaded` findings. Findings with
   * `callId` also contain the referenced call's `callStableId`.
   *
   * Every node has `id`, `stableId`, `label`, `order`, `code`, `line`, `columnNumber`, and AST-child ids sorted by

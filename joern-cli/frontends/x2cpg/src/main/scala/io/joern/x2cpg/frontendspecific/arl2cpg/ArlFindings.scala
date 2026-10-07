@@ -11,7 +11,8 @@ import io.shiftleft.semanticcpg.language.*
   * skipped-BOM-file values are repeated key/value pairs and are declared list-valued in [[ListValuedKeys]]. Effects of
   * calls are TAG nodes on the CALL (see [[ArlTags]]). Neither ever replaces an AST node: the CPG stays a faithful
   * lowering, and the findings are the honest remainder — arlgraph's "never lose an edge, never guess" invariants
-  * (DESIGN.md §0) in CPG terms.
+  * (DESIGN.md §0) in CPG terms. Every unresolved Java call in an ARL expression or an XOM method body has an
+  * `unresolved-call-target` finding.
   */
 object ArlFindings {
 
@@ -49,7 +50,7 @@ object ArlFindings {
     /** A B2X element the reader does not model — an effect possibly missing from the graph. */
     val B2xUnmodelledElement = "b2x-unmodelled-element"
 
-    /** A Java call whose target could not be chosen from the receiver and static argument types. */
+    /** A Java call whose target could not be chosen from the receiver and static argument types, including XOM bodies. */
     val UnresolvedCallTarget = "unresolved-call-target"
 
     val BomMember         = "bom-member"
@@ -72,11 +73,11 @@ object ArlFindings {
     val B2xBodyCallsMethodWithoutBody = "b2x-body-calls-method-without-body"
   }
 
-  /** Severity mapping: `unknown-construct` and `syntax-error` are `error`; `unresolved-call-target`,
-    * `bom-type-unresolved`, `bom-duplicate-class`, `bom-include-missing`, and `b2x-unmodelled-element` are
-    * `unresolved`; `unresolved-call-effects` is `info` only for `callee-body-not-in-artifact` and `unresolved`
-    * otherwise; `bom-member` and `bom-files-not-loaded` are `info`. An unknown code fails instead of receiving a
-    * default.
+  /** Severity mapping: `unknown-construct` and `syntax-error` are `error`; every `unresolved-call-target` (including
+    * reason `xom-body`), `bom-type-unresolved`, `bom-duplicate-class`, `bom-include-missing`, and
+    * `b2x-unmodelled-element` are `unresolved`; `unresolved-call-effects` is `info` only for
+    * `callee-body-not-in-artifact` and `unresolved` otherwise; `bom-member` and `bom-files-not-loaded` are `info`. An
+    * unknown code fails instead of receiving a default.
     */
   private[arl2cpg] def severity(code: String, reason: String): String = (code, reason) match {
     case (Codes.UnknownConstruct | Codes.SyntaxError, _)                                  => "error"
