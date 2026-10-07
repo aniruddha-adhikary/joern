@@ -56,7 +56,7 @@ class Arl2Cpg extends X2CpgFrontend {
       ) {
         new XomLinkerPass(cpg, config.xomClasspath, b2x, bom).createAndApply()
       }
-      new B2xEffectsPass(cpg, b2x).createAndApply()
+      new B2xEffectsPass(cpg, b2x, config.xomClasspath, bom).createAndApply()
       new FindingsPass(cpg, diagnostics, config.allowUnknown).createAndApply()
     }
   }
