@@ -56,8 +56,7 @@ class B2xTests extends AnyWordSpec with Matchers with BeforeAndAfterAll {
   private def buildWithMapping(
     arl: String,
     mapping: String,
-    config: Config => Config = (config: Config) => config,
-    validateCpg: Boolean = true
+    config: Config => Config = (config: Config) => config
   ): (Cpg, Path) = {
     val dir = Files.createTempDirectory("arl2cpg-b2x-signature")
     tmpDirs ::= dir
@@ -66,7 +65,7 @@ class B2xTests extends AnyWordSpec with Matchers with BeforeAndAfterAll {
     Files.writeString(b2xPath, mapping)
     val base = Config().withInputPath(dir.toString).withB2xPath(b2xPath.toString)
     val cpg  = new Arl2Cpg().createCpg(config(base)).get
-    if (validateCpg) PostFrontendValidator(cpg, ValidationLevel.V3).run()
+    PostFrontendValidator(cpg, ValidationLevel.V3).run()
     (cpg, b2xPath)
   }
 
@@ -282,7 +281,7 @@ class B2xTests extends AnyWordSpec with Matchers with BeforeAndAfterAll {
           |</class></translation>
           |""".stripMargin
       val (cpg, b2xPath) =
-        buildWithMapping(arl, mapping, _.withXomSrcPaths(Set(xomDir.toString)), validateCpg = false)
+        buildWithMapping(arl, mapping, _.withXomSrcPaths(Set(xomDir.toString)))
       try {
         val fullName = "com.acme.money.Amount.divideInternal:com.acme.money.Amount(com.acme.money.Amount)"
         val method   = cpg.method.fullNameExact(fullName).head
@@ -405,6 +404,7 @@ class B2xTests extends AnyWordSpec with Matchers with BeforeAndAfterAll {
           method.methodReturn.typeFullName shouldBe fullName.split(":").last.stripSuffix("()")
           method.filename shouldBe b2xPath.toString
           method.annotation.name("arlKind").parameterAssign.value.code.l shouldBe List("b2x-attribute")
+          methodTags(method, ArlTags.B2xAttribute) shouldBe Set(b2xPath.toString)
         }
         cpg.method.nameExact("setterOnly").l shouldBe empty
 
@@ -436,6 +436,7 @@ class B2xTests extends AnyWordSpec with Matchers with BeforeAndAfterAll {
         val json       = ujson.read(ArlExport.toJson(cpg, "attributes.cpg"))
         val attributes = json("b2xAttributes").arr
         attributes.map(_("name").str).toList shouldBe expectedFullNames.keys.toList.sorted
+        attributes.foreach(attribute => attribute("shadowsMethod").bool shouldBe false)
         val byName = attributes.map(attribute => attribute("name").str -> attribute).toMap
         byName("stringValue")("literal").obj.toMap shouldBe Map(
           "kind"  -> ujson.Str("string"),
@@ -492,14 +493,15 @@ class B2xTests extends AnyWordSpec with Matchers with BeforeAndAfterAll {
         buildWithMapping(
           signatureArl,
           attributeMapping,
-          _.withXomSrcPaths(Set(xomDir.toString)).withAllowUnknown(true),
-          validateCpg = false
+          _.withXomSrcPaths(Set(xomDir.toString)).withAllowUnknown(true)
         )
       try {
         val fullName = "com.acme.AttributeSample.stringValue:java.lang.String()"
         val method   = cpg.method.fullNameExact(fullName).head
         cpg.method.fullNameExact(fullName).size shouldBe 1
         method.filename should endWith("com/acme/AttributeSample.java")
+        method.annotation.name("arlKind").parameterAssign.value.code.l shouldBe List("xom")
+        methodTags(method, ArlTags.B2xAttribute) shouldBe Set(b2xPath.toString)
         methodTags(method, ArlTags.LiteralKind) shouldBe Set("string")
         methodTags(method, ArlTags.LiteralValue) shouldBe Set("153")
 
@@ -514,9 +516,11 @@ class B2xTests extends AnyWordSpec with Matchers with BeforeAndAfterAll {
 
         val json      = ujson.read(ArlExport.toJson(cpg, "attribute-shadow.cpg"))
         val attribute = json("b2xAttributes").arr.find(_("name").str == "stringValue").get
-        json("methods").arr.find(_("fullName").str == fullName).get("arlKind").str shouldBe "b2x-attribute"
+        val methodJson = json("methods").arr.find(_("fullName").str == fullName).get
+        methodJson("arlKind").str shouldBe "xom"
         attribute("methodStableId").str shouldBe
-          json("methods").arr.find(_("fullName").str == fullName).get("stableId").str
+          methodJson("stableId").str
+        attribute("shadowsMethod").bool shouldBe true
         attribute("literal")("value").str shouldBe "153"
       } finally cpg.close()
     }

@@ -170,6 +170,9 @@ object ArlTags {
   /** Unescaped literal value recovered from a B2X attribute getter body, when the literal has a value. */
   val LiteralValue = "ARL_LITERAL_VALUE"
 
+  /** value: path of the B2X file that declares this getter METHOD as an attribute. */
+  val B2xAttribute = "ARL_B2X_ATTRIBUTE"
+
   def tag(builder: DiffGraphBuilder, node: AbstractNode, name: String, value: String): NewTag = {
     val tag = NewTag().name(name).value(value)
     builder.addNode(tag)

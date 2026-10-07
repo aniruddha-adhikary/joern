@@ -29,14 +29,16 @@ import scala.collection.mutable
 
 /** Deterministic export contract: the root has `cpgFile` (filename only), `methods`, `types`, `b2xAttributes`, and
   * `findings`. Methods are sorted by `(fullName, id)` and contain `id`, `stableId`, `stableKey`, `name`, `fullName`,
-  * `signature`, `filename`, `line`, `lineEnd`, `arlKind`, and `nodes` (sorted by id); B2X getter methods use
-  * `arlKind = b2x-attribute`. Types are sorted by `(fullName, id)` and contain `id`, `stableId`, `name`, `fullName`,
-  * `file`, sorted `inherits`, and `members` sorted by `(name, id)` with `id`, `stableId`, `name`, `typeFullName`,
-  * `code`, and `line`. `b2xAttributes` is sorted by `(class, name)` and contains `class`, `name`, `type`,
-  * `methodStableId`, and an optional `literal` object with `kind` and optional `value`. Findings are sorted by node id
-  * and contain sorted key/value fields, with duplicate non-list-valued keys rejected. `candidates` is a sorted JSON
-  * array, always present on `unresolved-call-target` findings; `bomFiles` is a JSON array on `bom-files-not-loaded`
-  * findings. Findings with `callId` also contain the referenced call's `callStableId`.
+  * `signature`, `filename`, `line`, `lineEnd`, the METHOD's `arlKind`, and `nodes` (sorted by id). B2X attributes are
+  * identified by the `ARL_B2X_ATTRIBUTE` tag; a reused Java METHOD keeps its original `arlKind`. Types are sorted by
+  * `(fullName, id)` and contain `id`, `stableId`, `name`, `fullName`, `file`, sorted `inherits`, and `members` sorted
+  * by `(name, id)` with `id`, `stableId`, `name`, `typeFullName`, `code`, and `line`. `b2xAttributes` is sorted by
+  * `(astParentFullName, name, id)` and contains `class`, `name`, `type`, `methodStableId`, `shadowsMethod` (true when
+  * the tagged METHOD's `arlKind` is not `b2x-attribute`), and an optional `literal` object with `kind` and optional
+  * `value`. Findings are sorted by node id and contain sorted key/value fields, with duplicate non-list-valued keys
+  * rejected. `candidates` is a sorted JSON array, always present on `unresolved-call-target` findings; `bomFiles` is a
+  * JSON array on `bom-files-not-loaded` findings. Findings with `callId` also contain the referenced call's
+  * `callStableId`.
   *
   * Every node has `id`, `stableId`, `label`, `order`, `code`, `line`, `columnNumber`, and AST-child ids sorted by
   * `(order, id)`; CFG nodes add sorted `cfgOut`. CALL adds `name`, `methodFullName`, `signature`, `typeFullName`,
@@ -63,31 +65,16 @@ object ArlExport {
   private val UpperClosedTag = "ARL_INTERVAL_UPPER_CLOSED"
 
   def toJson(cpg: Cpg, cpgFile: String): String = {
-    val methods  = cpg.method.l.filterNot(_.isExternal).sortBy(method => (method.fullName, method.id))
-    val types    = cpg.typeDecl.isExternal(false).l.sortBy(typeDecl => (typeDecl.fullName, typeDecl.id))
-    val findings = cpg.finding.l.sortBy(_.id)
-    val shadowedAttributeMethodIds = findings
-      .filter(finding =>
-        ArlFindings.code(finding) == Codes.B2xShadowsMethod &&
-          ArlFindings.value(finding, Keys.CallId).isEmpty
-      )
-      .flatMap(_.evidence.map(_.id))
-      .toSet
-    val twinOrdinals  = methodTwinOrdinals(cpg, methods)
-    val stableIds     = new StableIdRegistry
-    val methodObjects = methods.map(method =>
-      methodJson(
-        cpg,
-        method,
-        stableIds,
-        twinOrdinals,
-        isShadowedB2xAttribute = shadowedAttributeMethodIds.contains(method.id)
-      )
-    )
+    val methods             = cpg.method.l.filterNot(_.isExternal).sortBy(method => (method.fullName, method.id))
+    val types               = cpg.typeDecl.isExternal(false).l.sortBy(typeDecl => (typeDecl.fullName, typeDecl.id))
+    val findings            = cpg.finding.l.sortBy(_.id)
+    val twinOrdinals        = methodTwinOrdinals(cpg, methods)
+    val stableIds           = new StableIdRegistry
+    val methodObjects       = methods.map(method => methodJson(cpg, method, stableIds, twinOrdinals))
     val typeObjects         = types.map(typeDecl => typeDeclJson(cpg, typeDecl, stableIds))
     val stableIdByNode      = stableIds.byNodeIdStableId
     val b2xAttributeObjects = methods
-      .filter(method => arlKind(method) == "b2x-attribute" || shadowedAttributeMethodIds.contains(method.id))
+      .filter(method => method.tag.l.exists(_.name == ArlTags.B2xAttribute))
       .sortBy(method => (method.astParentFullName, method.name, method.id))
       .map(method => b2xAttributeJson(method, stableIdByNode))
     val findingObjects = findings.map(finding => findingJson(finding, stableIdByNode))
@@ -107,8 +94,7 @@ object ArlExport {
     cpg: Cpg,
     method: Method,
     stableIds: StableIdRegistry,
-    twinOrdinals: Map[Long, Int],
-    isShadowedB2xAttribute: Boolean
+    twinOrdinals: Map[Long, Int]
   ): ujson.Obj = {
     val stableKey = methodStableKey(cpg, method, twinOrdinals)
     val fields    = Seq(
@@ -121,7 +107,7 @@ object ArlExport {
       "filename"  -> ujson.Str(method.filename),
       "line"      -> optionalNumber(method.lineNumber),
       "lineEnd"   -> optionalNumber(method.lineNumberEnd),
-      "arlKind"   -> ujson.Str(if (isShadowedB2xAttribute) "b2x-attribute" else arlKind(method)),
+      "arlKind"   -> ujson.Str(arlKind(method)),
       "nodes"     -> ujson.Arr.from(
         method.ast.l
           .distinctBy(_.id)
@@ -170,6 +156,7 @@ object ArlExport {
       "class"          -> ujson.Str(method.astParentFullName),
       "name"           -> ujson.Str(method.name),
       "type"           -> ujson.Str(method.methodReturn.typeFullName),
+      "shadowsMethod"  -> ujson.Bool(arlKind(method) != "b2x-attribute"),
       "methodStableId" -> ujson.Str(
         stableIdsByNodeId.getOrElse(
           method.id,

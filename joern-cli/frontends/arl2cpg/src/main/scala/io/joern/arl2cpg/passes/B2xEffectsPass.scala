@@ -238,6 +238,7 @@ class B2xEffectsPass(
         val literal    = attributeLiteral(member.body)
         methodsByFullName.get(fullName) match {
           case Some(existing) =>
+            ArlTags.tag(builder, existing, ArlTags.B2xAttribute, model.path)
             literal.foreach(addLiteralTags(builder, existing, _))
             if (member.returnType.isEmpty) {
               reportUnknownAttributeType(builder, existing, model, member, fullName)
@@ -281,6 +282,7 @@ class B2xEffectsPass(
                   .evaluationStrategy(EvaluationStrategies.BY_VALUE)
                   .order(3)
                 builder.addNode(method)
+                ArlTags.tag(builder, method, ArlTags.B2xAttribute, model.path)
                 builder.addNode(thisParam)
                 builder.addEdge(method, thisParam, EdgeTypes.AST)
                 builder.addNode(block)
