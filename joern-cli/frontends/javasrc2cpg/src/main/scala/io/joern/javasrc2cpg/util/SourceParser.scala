@@ -69,11 +69,7 @@ class SourceParser(
   }
 
   private def parse(file: Path, storeTokens: Boolean): Option[CompilationUnit] = {
-    val javaParserConfig =
-      new ParserConfiguration()
-        .setLanguageLevel(LanguageLevel.JAVA_25)
-        .setStoreTokens(storeTokens)
-    val parseResult = new JavaParser(javaParserConfig).parse(file)
+    val parseResult = new JavaParser(SourceParser.parserConfiguration(storeTokens)).parse(file)
 
     parseResult.getProblems.asScala.toList match {
       case Nil      => // Just carry on as usual
@@ -119,6 +115,11 @@ object SourceParser {
   }
 
   private val logger = LoggerFactory.getLogger(this.getClass)
+
+  def parserConfiguration(storeTokens: Boolean): ParserConfiguration =
+    new ParserConfiguration()
+      .setLanguageLevel(LanguageLevel.JAVA_25)
+      .setStoreTokens(storeTokens)
 
   private def checkExists(file: Path): Option[Path] = {
     if (Files.exists(file)) {

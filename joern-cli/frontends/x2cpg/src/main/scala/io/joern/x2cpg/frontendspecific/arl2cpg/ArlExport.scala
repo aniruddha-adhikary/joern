@@ -180,8 +180,29 @@ object ArlExport {
         "typeFullName" -> ujson.Str(member.typeFullName),
         "code"         -> ujson.Str(member.code),
         "line"         -> optionalNumber(member.lineNumber)
-      )
+      ) ++ initializerJson(member)
     )
+
+  private def initializerJson(member: Member): Seq[(String, ujson.Value)] = {
+    val codeValues  = member.tag.nameExact(ArlTags.InitializerCode).value.l
+    val kindValues  = member.tag.nameExact(ArlTags.LiteralKind).value.l
+    val valueValues = member.tag.nameExact(ArlTags.LiteralValue).value.l
+    if (codeValues.isEmpty && kindValues.isEmpty && valueValues.isEmpty) {
+      Nil
+    } else {
+      if (codeValues.size != 1 || kindValues.size != 1 || valueValues.size > 1) {
+        throw new IllegalStateException(
+          s"Member ${member.id} has inconsistent initializer tags: " +
+            s"code=${codeValues.size}, kind=${kindValues.size}, value=${valueValues.size}"
+        )
+      }
+      val fields =
+        Seq("code" -> ujson.Str(codeValues.head), "kind" -> ujson.Str(kindValues.head)) ++ valueValues.headOption.map(
+          value => "value" -> ujson.Str(value)
+        )
+      Seq("initializer" -> ujson.Obj.from(fields))
+    }
+  }
 
   private def findingJson(finding: Finding, stableIdsByNodeId: Map[Long, String]): ujson.Obj = {
     val pairs         = finding.keyValuePairs.map(pair => pair.key -> pair.value).toList

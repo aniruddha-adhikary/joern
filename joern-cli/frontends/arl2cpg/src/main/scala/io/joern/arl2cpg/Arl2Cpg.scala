@@ -8,6 +8,7 @@ import io.joern.arl2cpg.passes.{
   FindingsPass,
   MissingTypeNodePass,
   ParseDiagnostics,
+  XomFieldInitializerPass,
   XomLinkerPass,
   XomMethodKindPass,
   XomUnresolvedCallsPass
@@ -53,6 +54,7 @@ class Arl2Cpg extends X2CpgFrontend {
       }
       if (config.xomSrcPaths.nonEmpty) {
         new XomMethodKindPass(cpg).createAndApply()
+        new XomFieldInitializerPass(cpg, config.xomSrcPaths).createAndApply()
       }
       new MissingTypeNodePass(cpg, None).createAndApply()
       if (
