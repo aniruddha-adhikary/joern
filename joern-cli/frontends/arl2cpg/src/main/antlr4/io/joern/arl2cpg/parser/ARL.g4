@@ -137,7 +137,7 @@ aggregateLabel : BacktickId | freeText ;
 // rather than over one object's collection member — measured (ODM 9.6, permitty I02), where a
 // BAL "there is at least one item such that ..." compiles to a collect with no source expression.
 collectPattern
-    : bindingName ':' qualifiedName '(' expression? ')' ('in' expression)? ';'
+    : bindingName ':' qualifiedName '(' expression? ')' ( ('from'|'in') expression )? ';'
     ;
 
 projection
