@@ -1,9 +1,28 @@
 package io.joern.arl2cpg.bom
 
+import io.joern.arl2cpg.{Arl2Cpg, Main}
+import io.shiftleft.semanticcpg.utils.FileUtil
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpec
 
+import java.nio.file.{Files, Path}
+
 class BomParserTests extends AnyWordSpec with Matchers {
+
+  private def buildBranchWithBom(bomPath: Path, directory: Path): Unit = {
+    val arlPath = directory.resolve("branch.arl")
+    Files.writeString(
+      arlPath,
+      """public signature S extends java.lang.Object {}
+        |ruleset R (S) { rule `branch` { when {} then {} } }
+        |""".stripMargin
+    )
+    val config = Main.parseConfig(Array("--bom", bomPath.toString)).get.withInputPath(directory.toString)
+    config.bomPaths shouldBe Seq(bomPath.toString)
+    val cpg = new Arl2Cpg().createCpg(config).get
+    try cpg should not be null
+    finally cpg.close()
+  }
 
   "BomParserFacade" should {
     "produce structured types, members, metadata, generics, arrays, and domains" in {
@@ -91,6 +110,101 @@ class BomParserTests extends AnyWordSpec with Matchers {
       val multi = parsed.types.find(_.name == "Multi").get
       multi.superClass.map(_.erasedName) shouldBe Some("java.io.Serializable")
       multi.interfaces.map(_.erasedName) shouldBe List("java.lang.Cloneable")
+    }
+
+    "preserve Rule Designer directives and parse its property-file BOM" in {
+      val parsed = BomParserFacade.parse(
+        "borrower.bom",
+        """
+          |#loadGetterSetterAsProperties
+          |
+          |property "uuid" "00000000-0000-0000-0000-000000000001";
+          |property "version" "1";
+          |package loan;
+          |public class Borrower { public int creditScore; }
+          |""".stripMargin
+      )
+
+      parsed.directives shouldBe List("loadGetterSetterAsProperties")
+      parsed.properties.map(_.key) shouldBe List("uuid", "version")
+      parsed.types.map(_.fullName) shouldBe List("loan.Borrower")
+      parsed.types.head.members.find(_.name == "creditScore").flatMap(_.memberType.map(_.erasedName)) shouldBe Some("int")
+    }
+
+    "keep top-level directive names in source order" in {
+      BomParserFacade.parse("directives.bom", "#firstDirective\n#secondDirective\n").directives shouldBe
+        List("firstDirective", "secondDirective")
+    }
+
+    "parse contextual BOM keywords used by the domain and Grade repros" in {
+      val grade = BomParserFacade.parse(
+        "grade.bom",
+        """package acme.domain;
+          |public class Grade {
+          |  static final readonly acme.domain.Grade A;
+          |  static final readonly acme.domain.Grade B;
+          |}
+          |""".stripMargin
+      )
+      val gradeType = grade.types.head
+
+      gradeType.fullName shouldBe "acme.domain.Grade"
+      gradeType.members.map(_.name) shouldBe List("A", "B")
+      gradeType.members.map(_.memberType.map(_.erasedName)) shouldBe List(
+        Some("acme.domain.Grade"),
+        Some("acme.domain.Grade")
+      )
+
+      val keywords = BomParserFacade.parse(
+        "keywords.bom",
+        """package include.domain;
+          |class domain {
+          |  int domain;
+          |  int property;
+          |  int operator;
+          |  int readonly;
+          |  int writeonly;
+          |  domain domain(domain domain);
+          |}
+          |""".stripMargin
+      )
+      val declaration = keywords.types.head
+      declaration.fullName shouldBe "include.domain.domain"
+      declaration.members.map(_.name).toSet shouldBe Set("domain", "property", "operator", "readonly", "writeonly")
+      val method = declaration.members.find(member => member.kind == BomMemberKind.Method && member.name == "domain").get
+      method.memberType.map(_.erasedName) shouldBe Some("domain")
+      method.parameters.map(parameter => parameter.tpe.erasedName -> parameter.name) shouldBe List("domain" -> Some("domain"))
+    }
+
+    "build branch.arl through the --bom CLI option with either Rule Designer repro" in {
+      FileUtil.usingTemporaryDirectory("arl2cpg-rule-designer-cli") { directory =>
+        val borrower = directory.resolve("borrower.bom")
+        Files.writeString(
+          borrower,
+          """
+            |#loadGetterSetterAsProperties
+            |
+            |property "uuid" "00000000-0000-0000-0000-000000000001";
+            |property "version" "1";
+            |package loan;
+            |public class Borrower { public int creditScore; }
+            |""".stripMargin
+        )
+
+        val grade = directory.resolve("grade.bom")
+        Files.writeString(
+          grade,
+          """package acme.domain;
+            |public class Grade {
+            |  static final readonly acme.domain.Grade A;
+            |  static final readonly acme.domain.Grade B;
+            |}
+            |""".stripMargin
+        )
+
+        buildBranchWithBom(borrower, directory)
+        buildBranchWithBom(grade, directory)
+      }
     }
 
     "report every lexer and parser syntax error with file, line, and column" in {
