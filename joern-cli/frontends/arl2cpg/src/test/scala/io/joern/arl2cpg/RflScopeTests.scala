@@ -36,6 +36,56 @@ $tasks
     dir
   }
 
+  private def writeSubflowRfls(): Path = {
+    val root = Files.createTempDirectory("arl2cpg-subflow-rfl-test")
+    def write(relativePath: String, flowName: String, uuid: String, taskList: String): Unit = {
+      val path = root.resolve(relativePath)
+      Files.createDirectories(path.getParent)
+      Files.writeString(
+        path,
+        s"""<?xml version="1.0" encoding="UTF-8"?>
+           |<RflRuleflow>
+           |  <name>$flowName</name>
+           |  <uuid>$uuid</uuid>
+           |  <rfModel><Ruleflow><Body>
+           |    <TaskList>
+           |$taskList
+           |    </TaskList>
+           |  </Body></Ruleflow></rfModel>
+           |</RflRuleflow>
+           |""".stripMargin
+      )
+    }
+
+    write(
+      "amend/Flow.rfl",
+      "Flow",
+      uuid1,
+      """<RuleTask Identifier="computation"/>
+        |<RuleTask Identifier="GET_NEXT_ITEM"/>""".stripMargin
+    )
+    write(
+      "main/Flow.rfl",
+      "Flow",
+      uuid2,
+      """<RuleTask Identifier="computation"/>
+        |<RuleTask Identifier="check"/>""".stripMargin
+    )
+    write(
+      "amend/Main.rfl",
+      "Main",
+      "44444444-4444-4444-4444-444444444444",
+      s"""<SubflowTask Identifier="Flow" Uuid="$uuid1"/>"""
+    )
+    write(
+      "main/Main.rfl",
+      "Main",
+      "55555555-5555-5555-5555-555555555555",
+      s"""<SubflowTask Identifier="Flow" Uuid="$uuid2"/>"""
+    )
+    root
+  }
+
   /** Builds a frontend CPG directly (no default overlays / validation), so tests can inspect same-fullName methods and
     * unresolved calls without call-linker stubs or the post-frontend validator interfering.
     */
@@ -77,6 +127,18 @@ ruletask Amended (ctx) { ordering: natural; rules : r.*; }
        |ruletask check (ctx) { ordering: natural; rules: r.*; }
        |ruletask GET_NEXT_ITEM (ctx) { ordering: natural; rules: r.*; }
        |ruletask other (ctx) { ordering: natural; rules: r.*; }
+       |""".stripMargin
+  }
+
+  private def subflowArl(bodies: List[String]): String = {
+    val flows = bodies.map(body => s"flowtask Flow ($$p) { { $body } }").mkString("\n")
+    s"""ruleset Twin (S){
+       |  rule `r.1` { then { } }
+       |}
+       |$flows
+       |ruletask computation (ctx) { ordering: natural; rules: r.*; }
+       |ruletask check (ctx) { ordering: natural; rules: r.*; }
+       |ruletask GET_NEXT_ITEM (ctx) { ordering: natural; rules: r.*; }
        |""".stripMargin
   }
 
@@ -213,6 +275,35 @@ ruletask Amended (ctx) { ordering: natural; rules : r.*; }
         }
         info(s"Duplicate computation target observation: ${observations.mkString("; ")}")
       } finally cpg.close()
+    }
+  }
+
+  "a parent listing a subflow task" should {
+    val metadata = writeSubflowRfls()
+    val shortBody = "call task: Flow>computation; call task: Flow>GET_NEXT_ITEM;"
+    val mainBody  = "call task: Flow>computation; call task: Flow>check;"
+
+    "not become a candidate for the subflow body, regardless of declaration order" in {
+      def assertScopes(bodies: List[String], expectedUuids: List[String]): Unit = {
+        val cpg = arlCpg(subflowArl(bodies), Option(metadata))
+        try {
+          val flows = cpg.method.nameExact("Flow").l.sortBy(_.lineNumber)
+          flows.size.shouldBe(2)
+          flows.map(_.fullName).shouldBe(expectedUuids.map(uuid => s"Twin.Flow@$uuid:void()"))
+          flows.map(scopeOf).shouldBe(List("resolved", "resolved"))
+          flows.map(uuidOf).shouldBe(expectedUuids)
+          val byUuid = flows.map(flow => uuidOf(flow) -> flow).toMap
+          byUuid(uuid1).ast.isCall.nameExact("Flow>computation").l.size.shouldBe(1)
+          byUuid(uuid1).ast.isCall.nameExact("Flow>GET_NEXT_ITEM").l.size.shouldBe(1)
+          byUuid(uuid1).ast.isCall.nameExact("Flow>check").l.shouldBe(Nil)
+          byUuid(uuid2).ast.isCall.nameExact("Flow>computation").l.size.shouldBe(1)
+          byUuid(uuid2).ast.isCall.nameExact("Flow>check").l.size.shouldBe(1)
+          byUuid(uuid2).ast.isCall.nameExact("Flow>GET_NEXT_ITEM").l.shouldBe(Nil)
+        } finally cpg.close()
+      }
+
+      assertScopes(List(shortBody, mainBody), List(uuid1, uuid2))
+      assertScopes(List(mainBody, shortBody), List(uuid2, uuid1))
     }
   }
 
