@@ -74,7 +74,50 @@ public class LoanUtil {
     }
   }
 
+  private def withLinkedSourceRoots(arlInputSymlink: Boolean, xomSourceSymlink: Boolean)(f: Cpg => Unit): Unit = {
+    FileUtil.usingTemporaryDirectory("arl2cpg-linked-source-roots") { dir =>
+      val arlRoot = Files.createDirectories(dir.resolve("arl"))
+      Files.writeString(arlRoot.resolve("rules.arl"), arlCode)
+
+      val xomRoot = Files.createDirectories(dir.resolve("xom"))
+      Files.createDirectories(xomRoot.resolve("loan"))
+      Files.writeString(xomRoot.resolve("loan/Borrower.java"), borrowerJava)
+      Files.writeString(xomRoot.resolve("loan/LoanUtil.java"), loanUtilJava)
+      Files.writeString(xomRoot.resolve("loan/Address.java"), addressJava)
+
+      val inputPath =
+        if (arlInputSymlink) {
+          val link = dir.resolve("arl-link")
+          Files.createSymbolicLink(link, arlRoot)
+          link
+        } else arlRoot
+      val xomPath =
+        if (xomSourceSymlink) {
+          val link = dir.resolve("xom-link")
+          Files.createSymbolicLink(link, xomRoot)
+          link
+        } else xomRoot
+
+      val config = Config().withInputPath(inputPath.toString).withXomSrcPaths(Set(xomPath.toString))
+      val cpg    = new Arl2Cpg().createCpg(config).get
+      try f(cpg)
+      finally cpg.close()
+    }
+  }
+
   "ARL linked against the XOM" should {
+
+    "follow a symlinked main ARL input directory" in withLinkedSourceRoots(arlInputSymlink = true, xomSourceSymlink = false) {
+      cpg =>
+        cpg.method.name("getBankruptcyAge").size shouldBe 1
+        cpg.call.name("getBankruptcyAge").head.methodFullName shouldBe "loan.Borrower.getBankruptcyAge:int()"
+    }
+
+    "import XOM sources from a symlinked directory" in withLinkedSourceRoots(arlInputSymlink = false, xomSourceSymlink = true) {
+      cpg =>
+        cpg.typeDecl.fullName.l should contain("loan.Borrower")
+        cpg.call.name("getBankruptcyAge").head.methodFullName shouldBe "loan.Borrower.getBankruptcyAge:int()"
+    }
 
     "type the signature-param fieldAccess with the Java type" in withXomCpg { cpg =>
       val fa = cpg.call.name(Operators.fieldAccess).code(".*borrower.*").l

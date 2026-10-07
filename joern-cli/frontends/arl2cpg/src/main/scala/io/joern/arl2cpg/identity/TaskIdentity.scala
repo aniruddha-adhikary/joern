@@ -1,5 +1,6 @@
 package io.joern.arl2cpg.identity
 
+import io.joern.arl2cpg.util.InputFiles
 import org.slf4j.LoggerFactory
 
 import java.nio.file.{Files, Path, Paths}
@@ -51,17 +52,19 @@ object TaskIdentity {
     * different uuids are both dropped — a conflict means unknown, never a guess.
     */
   def load(paths: Seq[String]): TaskIdentityIndex = {
-    val files = paths.toList.flatMap { path =>
+    val files = paths.toList.sorted.flatMap { path =>
       val root = Paths.get(path)
       if (Files.isRegularFile(root)) List(root)
       else if (Files.isDirectory(root)) {
-        val stream = Files.walk(root)
-        try {
-          stream.iterator().asScala.toList.filter(file => Files.isRegularFile(file) && file.toString.endsWith(".jsonl"))
-        } finally stream.close()
+        InputFiles.walk(
+          root,
+          "--task-identity",
+          file => Files.isRegularFile(file) && file.getFileName.toString.endsWith(".jsonl")
+        )
+      } else if (!Files.exists(root)) {
+        throw new IllegalArgumentException(s"--task-identity path '$path' does not exist")
       } else {
-        logger.warn(s"--task-identity '$path' is not a file or directory; skipping")
-        List.empty
+        throw new IllegalArgumentException(s"--task-identity path '$path' is not a file or directory")
       }
     }
     val parsed = files.flatMap(parseFile)

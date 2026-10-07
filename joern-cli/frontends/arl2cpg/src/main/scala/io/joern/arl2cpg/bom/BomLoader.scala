@@ -1,5 +1,6 @@
 package io.joern.arl2cpg.bom
 
+import io.joern.arl2cpg.util.InputFiles
 import io.joern.x2cpg.frontendspecific.arl2cpg.ArlFindings.{Codes, Keys}
 
 import java.nio.charset.StandardCharsets
@@ -163,7 +164,7 @@ object BomModelLoader {
     if (!Files.exists(path)) {
       throw new IllegalArgumentException(s"--xom-classpath path '$pathString' does not exist")
     } else if (Files.isDirectory(path)) {
-      loadDirectory(path, roots = Nil)
+      loadDirectory(path, roots = Nil, optionName = "--xom-classpath", allowNoBom = true)
     } else if (Files.isRegularFile(path)) {
       loadJar(path)
     } else {
@@ -176,19 +177,30 @@ object BomModelLoader {
     if (!Files.exists(path)) {
       throw new IllegalArgumentException(s"--bom path '$pathString' does not exist")
     } else if (Files.isDirectory(path)) {
-      val source = loadDirectory(path, roots = Nil)
+      val source = loadDirectory(path, roots = Nil, optionName = "--bom")
       source.copy(roots = source.files.keys.toList.sorted)
     } else if (Files.isRegularFile(path)) {
       val root   = path.getParent
-      val source = loadDirectory(root, roots = Nil)
+      val source = loadDirectory(root, roots = Nil, optionName = "--bom")
       source.copy(roots = List(relative(root, path)))
     } else {
       throw new IllegalArgumentException(s"--bom path '$pathString' is not a file or directory")
     }
   }
 
-  private def loadDirectory(root: Path, roots: List[String]): BomSource = {
-    val paths          = bomPathsUnder(root)
+  private def loadDirectory(
+    root: Path,
+    roots: List[String],
+    optionName: String,
+    allowNoBom: Boolean = false
+  ): BomSource = {
+    val paths = if (allowNoBom) {
+      InputFiles
+        .walk(root, optionName, Files.isRegularFile(_))
+        .filter(_.getFileName.toString.endsWith(".bom"))
+    } else {
+      bomPathsUnder(root, optionName)
+    }
     val normalizedRoot = root.toRealPath()
     val files          = paths.map { path =>
       val relativePath = relative(root, path)
@@ -199,7 +211,7 @@ object BomModelLoader {
 
   private def loadExternalRoot(path: Path): BomSource = {
     val root  = path.getParent
-    val files = bomPathsUnder(root).map { file =>
+    val files = bomPathsUnder(root, "--bom-root").map { file =>
       val relativePath = relative(root, file)
       relativePath -> BomInput(relativePath, file.toRealPath().toString, Files.readString(file, StandardCharsets.UTF_8))
     }.toMap
@@ -241,19 +253,8 @@ object BomModelLoader {
     }
   }
 
-  private def bomPathsUnder(root: Path): List[Path] = {
-    val stream = Files.walk(root)
-    try {
-      stream
-        .iterator()
-        .asScala
-        .filter(path => Files.isRegularFile(path) && path.getFileName.toString.endsWith(".bom"))
-        .toList
-        .sortBy(relative(root, _))
-    } finally {
-      stream.close()
-    }
-  }
+  private def bomPathsUnder(root: Path, optionName: String): List[Path] =
+    InputFiles.walk(root, optionName, path => Files.isRegularFile(path) && path.getFileName.toString.endsWith(".bom"))
 
   private def relative(root: Path, path: Path): String =
     root.relativize(path).toString.replace('\\', '/')

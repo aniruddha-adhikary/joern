@@ -1,5 +1,6 @@
 package io.joern.arl2cpg.passes.resolution
 
+import io.joern.arl2cpg.util.InputFiles
 import io.joern.x2cpg.frontendspecific.arl2cpg.ArlFindings.Codes
 import io.joern.arl2cpg.bom.{
   BomDiagnostic,
@@ -378,36 +379,51 @@ final class TypeModel(sourceDecls: Seq[TypeDecl], classpath: Seq[String], bom: B
     classpath.foreach { pathString =>
       val path = Paths.get(pathString)
       if (!Files.exists(path)) {
-        logger.warn(s"Ignoring nonexistent --xom-classpath path '$pathString'")
+        throw new IllegalArgumentException(s"--xom-classpath path '$pathString' does not exist")
       } else if (Files.isDirectory(path)) {
-        val stream = Files.walk(path)
-        try {
-          stream
-            .iterator()
-            .asScala
-            .filter(file => Files.isRegularFile(file) && file.toString.endsWith(".class"))
-            .toList
-            .sortBy(_.toString)
-            .foreach { file =>
+        InputFiles
+          .walk(
+            path,
+            "--xom-classpath",
+            file =>
+              Files.isRegularFile(file) && {
+                val name = file.getFileName.toString
+                name.endsWith(".class") || name.endsWith(".jar")
+              }
+          )
+          .foreach { file =>
+            if (file.getFileName.toString.endsWith(".class")) {
               val relative = path.relativize(file)
               index.getOrElseUpdate(className(relative.toString), DirectoryClass(path, relative))
+            } else {
+              indexJar(index, file)
             }
-        } finally stream.close()
-      } else {
-        try {
-          val jar     = new JarFile(path.toFile)
-          val entries = jar.entries().asScala.filter(entry => !entry.isDirectory && entry.getName.endsWith(".class"))
-          entries.toList.sortBy(_.getName).foreach { entry =>
-            index.getOrElseUpdate(className(entry.getName), JarClass(path, entry.getName))
           }
-          jar.close()
-        } catch {
-          case NonFatal(exception) =>
-            logger.warn(s"Ignoring unreadable --xom-classpath jar '$pathString'", exception)
-        }
+      } else if (Files.isRegularFile(path)) {
+        indexJar(index, path)
+      } else {
+        throw new IllegalArgumentException(s"--xom-classpath path '$pathString' is not a file or directory")
       }
     }
     index.toMap
+  }
+
+  private def indexJar(index: mutable.LinkedHashMap[String, ClassLocation], path: Path): Unit = {
+    try {
+      val jar = new JarFile(path.toFile)
+      try {
+        jar
+          .entries()
+          .asScala
+          .filter(entry => !entry.isDirectory && entry.getName.endsWith(".class"))
+          .toList
+          .sortBy(_.getName)
+          .foreach(entry => index.getOrElseUpdate(className(entry.getName), JarClass(path, entry.getName)))
+      } finally jar.close()
+    } catch {
+      case NonFatal(exception) =>
+        logger.warn(s"Ignoring unreadable --xom-classpath jar '$path'", exception)
+    }
   }
 
   private def className(classFilePath: String): String =

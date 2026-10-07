@@ -88,6 +88,18 @@ class BomModelTests extends AnyWordSpec with Matchers {
       }
     }
 
+    "load a symlinked --bom directory" in {
+      FileUtil.usingTemporaryDirectory("arl2cpg-bom-symlink") { directory =>
+        val bomDirectory = Files.createDirectories(directory.resolve("bom"))
+        Files.writeString(bomDirectory.resolve("linked.bom"), "package sample; class Linked {}")
+        val symlink = directory.resolve("bom-link")
+        Files.createSymbolicLink(symlink, bomDirectory)
+
+        val model = BomModel.load(Nil, Seq(symlink.toString))
+        model.types.map(_.declaration.fullName) shouldBe List("sample.Linked")
+      }
+    }
+
     "load classpath jars in classpath and entry-name order with relative finding paths" in {
       FileUtil.usingTemporaryDirectory("arl2cpg-bom-classpath") { directory =>
         val firstJar  = directory.resolve("first.jar")

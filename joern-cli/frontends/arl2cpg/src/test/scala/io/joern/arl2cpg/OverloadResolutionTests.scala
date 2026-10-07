@@ -1100,6 +1100,51 @@ ruleset R (S) {
       }
     }
 
+    "index jars nested under an XOM classpath directory" in {
+      FileUtil.usingTemporaryDirectory("arl2cpg-overload-nested-jar") { dir =>
+        val (jar, _) = compileStubSources(dir)
+        val classpathDir = Files.createDirectories(dir.resolve("classpath"))
+        Files.copy(jar, classpathDir.resolve("cp-util.jar"))
+
+        withCpgAt(
+          dir,
+          """CpUtil.objectCount(new Object[]{"a"});""",
+          Seq("import loan.CpUtil;"),
+          "",
+          Map.empty,
+          Seq(classpathDir.toString),
+          allowUnknown = true
+        ) { cpg =>
+          cpg.call.name("objectCount").head.methodFullName shouldBe
+            "loan.CpUtil.objectCount:int(java.lang.Object[])"
+        }
+      }
+    }
+
+    "fail on missing and unusable XOM classpath paths" in {
+      FileUtil.usingTemporaryDirectory("arl2cpg-overload-invalid-classpath") { dir =>
+        val inputDir = Files.createDirectories(dir.resolve("input"))
+        Files.writeString(inputDir.resolve("rules.arl"), ruleSource("int value = 1;"))
+        val missing = dir.resolve("missing-classpath")
+        val unusable = Files.createDirectories(dir.resolve("unusable-classpath"))
+        Files.writeString(unusable.resolve("README"), "no classes or jars")
+
+        List(missing, unusable).foreach { path =>
+          val result = new Arl2Cpg().createCpg(
+            Config().withInputPath(inputDir.toString).withXomClasspath(Seq(path.toString))
+          )
+          val error = result.failed.get
+          val messages =
+            Iterator.iterate(error: Throwable)(_.getCause)
+              .takeWhile(_ != null)
+              .flatMap(exception => Option(exception.getMessage))
+              .mkString("\n")
+          messages should include("--xom-classpath")
+          messages should include(path.toString)
+        }
+      }
+    }
+
     "use an explicitly selected alternate classpath BOM root" in {
       FileUtil.usingTemporaryDirectory("arl2cpg-bom-alternate-root") { dir =>
         val (jar, _) = compileStubSources(dir)

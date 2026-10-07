@@ -1,13 +1,12 @@
 package io.joern.arl2cpg.rfl
 
-import org.slf4j.LoggerFactory
+import io.joern.arl2cpg.util.InputFiles
 import org.w3c.dom.{Document, Element}
 
 import java.nio.file.{Files, Path, Paths}
 import javax.xml.parsers.DocumentBuilderFactory
 import scala.collection.mutable
-import scala.jdk.CollectionConverters.*
-import scala.util.Try
+import scala.util.control.NonFatal
 
 /** Original ODM ruleflow metadata parsed from a `.rfl` sidecar file.
   *
@@ -24,31 +23,18 @@ case class RuleflowMeta(
 )
 
 object RflMetadata {
-  private val logger = LoggerFactory.getLogger(getClass)
 
-  /** Recursively collect and parse every `*.rfl` file under each directory; malformed files are skipped. */
+  /** Recursively collect and parse every `*.rfl` file under each directory. */
   def load(dirs: Seq[String]): List[RuleflowMeta] = {
-    dirs.toList.flatMap { dir =>
-      val root = Paths.get(dir)
-      if (!Files.isDirectory(root)) {
-        logger.warn(s"--rfl-src '$dir' is not a directory; skipping")
-        List.empty
-      } else {
-        val stream = Files.walk(root)
-        try {
-          stream
-            .iterator()
-            .asScala
-            .filter(path => Files.isRegularFile(path) && path.toString.endsWith(".rfl"))
-            .toList
-            .flatMap(parse)
-        } finally stream.close()
-      }
+    dirs.toList.sorted.flatMap { dir =>
+      InputFiles
+        .walk(Paths.get(dir), "--rfl-src", path => Files.isRegularFile(path) && path.toString.endsWith(".rfl"))
+        .map(parse)
     }
   }
 
-  private def parse(path: Path): Option[RuleflowMeta] = {
-    Try {
+  private def parse(path: Path): RuleflowMeta = {
+    try {
       val factory = DocumentBuilderFactory.newInstance()
       factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
       factory.setFeature("http://xml.org/sax/features/external-general-entities", false)
@@ -71,11 +57,9 @@ object RflMetadata {
         }
       }
       RuleflowMeta(name, uuid, taskIds.toSet, subflowTargets.toMap, path.toString)
-    } match {
-      case scala.util.Success(meta)      => Option(meta)
-      case scala.util.Failure(exception) =>
-        logger.warn(s"Failed to parse rfl metadata '$path'; skipping", exception)
-        None
+    } catch {
+      case NonFatal(exception) =>
+        throw new IllegalArgumentException(s"Failed to parse --rfl-src file '$path'", exception)
     }
   }
 
