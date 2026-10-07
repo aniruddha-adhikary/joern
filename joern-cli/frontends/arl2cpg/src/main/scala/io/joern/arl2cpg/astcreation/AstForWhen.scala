@@ -235,7 +235,7 @@ trait AstForWhen {
   private def astsForAggregate(ctx: ARLParser.AggregatePatternContext, negated: Boolean): (List[Ast], List[Ast]) = {
     val labelName = ctx.aggregateLabel().getText match {
       case backticked if backticked.startsWith("`") => stripBackticks(backticked)
-      case plain                                    => plain.trim
+      case _                                        => code(ctx.aggregateLabel()).trim
     }
 
     val collectResults = ctx.collectPattern().asScala.toList.map { collect =>

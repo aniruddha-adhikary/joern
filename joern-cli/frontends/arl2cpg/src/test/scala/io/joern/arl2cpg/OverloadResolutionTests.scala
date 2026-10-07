@@ -4,11 +4,13 @@ import io.joern.x2cpg.frontendspecific.arl2cpg.ArlFindings
 import io.joern.x2cpg.frontendspecific.arl2cpg.ArlFindings.{Codes, Keys}
 import io.joern.x2cpg.Defines
 import io.joern.x2cpg.X2Cpg
+import io.joern.arl2cpg.parser.{ARLBaseListener, ARLParser, ArlParserFacade}
 import io.joern.x2cpg.frontendspecific.arl2cpg.ArlExport
 import io.shiftleft.codepropertygraph.generated.{Cpg, DispatchTypes, Operators}
 import io.shiftleft.codepropertygraph.generated.nodes.{Call, Identifier, Literal}
 import io.shiftleft.semanticcpg.language.*
 import io.shiftleft.semanticcpg.utils.FileUtil
+import org.antlr.v4.runtime.tree.ParseTreeWalker
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpec
 
@@ -79,6 +81,68 @@ ruleset R (S) {
     }
     finally cpg.close()
   }
+
+  private def withAggregateCpg(label: String, use: String)(test: Cpg => Unit): Unit =
+    FileUtil.usingTemporaryDirectory("arl2cpg-aggregate-unquoted-label") { dir =>
+      val xomDir  = dir.resolve("xom")
+      val sources = Map(
+        "acme/Order.java" ->
+          """package acme;
+            |public class Order { public java.util.List<Line> lines; }
+            |""".stripMargin,
+        "acme/Line.java" ->
+          """package acme;
+            |public class Line { public Integer sequenceNumber; }
+            |""".stripMargin,
+        "acme/Result.java" ->
+          """package acme;
+            |public class Result {}
+            |""".stripMargin,
+        "ilog/rules/brl/IlrCollectionUtil.java" ->
+          """package ilog.rules.brl;
+            |public class IlrCollectionUtil {
+            |  public static int getSize(java.util.Collection values) { return values.size(); }
+            |}
+            |""".stripMargin
+      )
+      sources.foreach { case (relativePath, source) =>
+        val path = xomDir.resolve(relativePath)
+        Files.createDirectories(path.getParent)
+        Files.writeString(path, source)
+      }
+
+      val source =
+        s"""import java.util.ArrayList;
+           |import ilog.rules.brl.IlrCollectionUtil;
+           |public signature S extends java.lang.Object {}
+           |ruleset R (S) {
+           |  rule `aggregate.label` {
+           |    when {
+           |      o : acme.Order();
+           |      $label:aggregate {
+           |        collect_class_1 : acme.Line(this.sequenceNumber.intValue() > 0) in o.lines;
+           |      } do {
+           |        ArrayList<acme.Line>{collect_class_1};
+           |      }
+           |      r : acme.Result();
+           |    }
+           |    then {
+           |      System.out.println(IlrCollectionUtil.getSize($use));
+           |    }
+           |  }
+           |}
+           |""".stripMargin
+      val input = dir.resolve("rules.arl")
+      Files.writeString(input, source)
+      ArlParserFacade.parse(input.toString).get.errorCount shouldBe 0
+
+      val config = Config().withInputPath(dir.toString).withXomSrcPaths(Set(xomDir.toString))
+      val cpg    = new Arl2Cpg().createCpg(config).get
+      try {
+        assertEveryArlCallHasSourcePosition(cpg)
+        test(cpg)
+      } finally cpg.close()
+    }
 
   private def assertEveryArlCallHasSourcePosition(cpg: Cpg): Unit = {
     val missing = cpg.call.l.filter(call =>
@@ -266,6 +330,74 @@ ruleset R (S) {
       |  public String name;
       |}
       |""".stripMargin
+
+  "aggregate labels" should {
+
+    "preserve unquoted label whitespace for local and method resolution" in {
+      val cases = Seq(
+        ("numbered lines", "`numbered lines`", "numbered lines"),
+        ("thing sequence number > 0", "`thing sequence number > 0`", "thing sequence number > 0"),
+        ("`numbered lines`", "`numbered lines`", "numbered lines"),
+        ("numberedLines", "numberedLines", "numberedLines")
+      )
+      cases.foreach { case (label, use, name) =>
+        withClue(s"label=$label, use=$use: ") {
+          withAggregateCpg(label, use) { cpg =>
+            cpg.local.nameExact(name).head.typeFullName shouldBe "java.util.ArrayList"
+            val identifiers = cpg.identifier.nameExact(name).l
+            identifiers should not be empty
+            identifiers.map(_.typeFullName).distinct shouldBe List("java.util.ArrayList")
+
+            val getSize = cpg.call.nameExact("getSize").head
+            getSize.methodFullName shouldBe "ilog.rules.brl.IlrCollectionUtil.getSize:int(java.util.Collection)"
+            findingFor(cpg, getSize.id()) shouldBe empty
+          }
+        }
+      }
+    }
+
+    "observe that not before an unquoted aggregate label is parsed as part of the label" in {
+      FileUtil.usingTemporaryDirectory("arl2cpg-negated-aggregate-label") { dir =>
+        val input = dir.resolve("rules.arl")
+        Files.writeString(
+          input,
+          """public signature S extends java.lang.Object {}
+            |ruleset R (S) {
+            |  rule `not.aggregate` {
+            |    when {
+            |      not numbered lines:aggregate {
+            |        item : acme.Line();
+            |      } do {
+            |        count {item};
+            |      }
+            |    }
+            |    then {}
+            |  }
+            |}
+            |""".stripMargin
+        )
+        val parsed = ArlParserFacade.parse(input.toString).get
+        parsed.errorCount shouldBe 0
+        val aggregates        = scala.collection.mutable.ListBuffer.empty[ARLParser.AggregatePatternContext]
+        val negatedAggregates = scala.collection.mutable.ListBuffer.empty[ARLParser.NotPatternContext]
+        ParseTreeWalker.DEFAULT.walk(
+          new ARLBaseListener {
+            override def enterAggregatePattern(ctx: ARLParser.AggregatePatternContext): Unit =
+              aggregates += ctx
+
+            override def enterNotPattern(ctx: ARLParser.NotPatternContext): Unit =
+              if (ctx.aggregatePattern() != null) negatedAggregates += ctx
+          },
+          parsed.compilationUnit
+        )
+        aggregates should have size 1
+        negatedAggregates shouldBe empty
+        val label = aggregates.head.aggregateLabel()
+        label.getText shouldBe "notnumberedlines"
+        parsed.content.substring(label.getStart.getStartIndex, label.getStop.getStopIndex + 1) shouldBe "not numbered lines"
+      }
+    }
+  }
 
   "argument-type-aware Java call resolution" should {
 
