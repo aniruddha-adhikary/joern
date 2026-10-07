@@ -27,12 +27,12 @@ import java.security.MessageDigest
 import scala.collection.mutable
 
 /** Deterministic export contract: the root has `cpgFile` (filename only), `methods`, `types`, and `findings`. Methods
-  * are sorted by `(fullName, id)` and contain `id`, `stableId`, `name`, `fullName`, `signature`, `filename`, `line`,
-  * `lineEnd`, `arlKind`, and `nodes` (sorted by id); types are sorted by `(fullName, id)` and contain `id`, `stableId`,
-  * `name`, `fullName`, `file`, sorted `inherits`, and `members` sorted by `(name, id)` with `id`, `stableId`, `name`,
-  * `typeFullName`, `code`, and `line`; findings are sorted by node id and contain sorted key/value fields, with
-  * duplicate non-list-valued keys rejected. `candidates` is a sorted JSON array, always present on
-  * `unresolved-call-target` findings; `bomFiles` is a JSON array on `bom-files-not-loaded` findings. Findings with
+  * are sorted by `(fullName, id)` and contain `id`, `stableId`, `stableKey`, `name`, `fullName`, `signature`,
+  * `filename`, `line`, `lineEnd`, `arlKind`, and `nodes` (sorted by id); types are sorted by `(fullName, id)` and
+  * contain `id`, `stableId`, `name`, `fullName`, `file`, sorted `inherits`, and `members` sorted by `(name, id)` with
+  * `id`, `stableId`, `name`, `typeFullName`, `code`, and `line`; findings are sorted by node id and contain sorted
+  * key/value fields, with duplicate non-list-valued keys rejected. `candidates` is a sorted JSON array, always present
+  * on `unresolved-call-target` findings; `bomFiles` is a JSON array on `bom-files-not-loaded` findings. Findings with
   * `callId` also contain the referenced call's `callStableId`.
   *
   * Every node has `id`, `stableId`, `label`, `order`, `code`, `line`, `columnNumber`, and AST-child ids sorted by
@@ -47,12 +47,12 @@ import scala.collection.mutable
   * export `typeFullName` as `ANY`.
   *
   * Stable IDs are lowercase hexadecimal encodings of the first 16 bytes of SHA-256 over each key's UTF-8 bytes. A
-  * METHOD key is `METHOD:<fullName>@<filename>`; a TYPE_DECL key is `TYPE_DECL:<fullName>@<filename>`; and a MEMBER key
-  * is its parent TYPE_DECL key followed by `/MEMBER:<name>`. An AST node under a method is keyed by the nearest
-  * enclosing METHOD key followed by `/<LABEL>:<order>` for every AST step from that METHOD down to the node. Absolute
-  * filenames in keys are made relative to `cpg.metaData.root`; exported filename fields are unchanged. Line and column
-  * are intentionally excluded. Duplicate sibling `(LABEL, order)` pairs and duplicate exported stable IDs throw instead
-  * of receiving tie-breakers.
+  * METHOD key is `METHOD:<fullName>@<filename>`; methods sharing a full name and filename receive `#<ordinal>` suffixes
+  * ordered by line and column. A TYPE_DECL key is `TYPE_DECL:<fullName>@<filename>`; and a MEMBER key is its parent
+  * TYPE_DECL key followed by `/MEMBER:<name>`. An AST node under a method is keyed by the nearest enclosing METHOD key
+  * followed by `/<LABEL>:<order>` for every AST step from that METHOD down to the node. Absolute filenames in keys are
+  * made relative to `cpg.metaData.root`; exported filename fields are unchanged. Duplicate sibling `(LABEL, order)`
+  * pairs and duplicate exported stable IDs throw instead of receiving tie-breakers.
   */
 object ArlExport {
 
@@ -63,10 +63,12 @@ object ArlExport {
     val methods        = cpg.method.l.filterNot(_.isExternal).sortBy(method => (method.fullName, method.id))
     val types          = cpg.typeDecl.isExternal(false).l.sortBy(typeDecl => (typeDecl.fullName, typeDecl.id))
     val findings       = cpg.finding.l.sortBy(_.id)
+    val twinOrdinals   = methodTwinOrdinals(cpg, methods)
     val stableIds      = new StableIdRegistry
-    val methodObjects  = methods.map(method => methodJson(cpg, method, stableIds))
+    val methodObjects  = methods.map(method => methodJson(cpg, method, stableIds, twinOrdinals))
     val typeObjects    = types.map(typeDecl => typeDeclJson(cpg, typeDecl, stableIds))
-    val findingObjects = findings.map(finding => findingJson(finding, stableIds.byNodeIdStableId))
+    val stableIdByNode = stableIds.byNodeIdStableId
+    val findingObjects = findings.map(finding => findingJson(finding, stableIdByNode))
     val json           = ujson.Obj.from(
       Seq(
         "cpgFile"  -> ujson.Str(cpgFile),
@@ -78,10 +80,17 @@ object ArlExport {
     ujson.write(json)
   }
 
-  private def methodJson(cpg: Cpg, method: Method, stableIds: StableIdRegistry): ujson.Obj = {
-    val fields = Seq(
+  private def methodJson(
+    cpg: Cpg,
+    method: Method,
+    stableIds: StableIdRegistry,
+    twinOrdinals: Map[Long, Int]
+  ): ujson.Obj = {
+    val stableKey = methodStableKey(cpg, method, twinOrdinals)
+    val fields    = Seq(
       "id"        -> number(method.id),
-      "stableId"  -> ujson.Str(stableIds.add(method.id, methodStableKey(cpg, method))),
+      "stableId"  -> ujson.Str(stableIds.add(method.id, stableKey)),
+      "stableKey" -> ujson.Str(stableKey),
       "name"      -> ujson.Str(method.name),
       "fullName"  -> ujson.Str(method.fullName),
       "signature" -> ujson.Str(method.signature),
@@ -93,7 +102,7 @@ object ArlExport {
         method.ast.l
           .distinctBy(_.id)
           .sortBy(_.id)
-          .map(node => nodeJson(cpg, node, stableIds))
+          .map(node => nodeJson(cpg, node, stableIds, twinOrdinals))
       )
     )
     ujson.Obj.from(fields)
@@ -181,10 +190,15 @@ object ArlExport {
     }
   }
 
-  private def nodeJson(cpg: Cpg, node: AstNode, stableIds: StableIdRegistry): ujson.Obj = {
+  private def nodeJson(
+    cpg: Cpg,
+    node: AstNode,
+    stableIds: StableIdRegistry,
+    twinOrdinals: Map[Long, Int]
+  ): ujson.Obj = {
     val fields = mutable.ListBuffer[(String, ujson.Value)](
       ("id", number(node.id)),
-      ("stableId", ujson.Str(stableIds.add(node.id, astNodeStableKey(cpg, node)))),
+      ("stableId", ujson.Str(stableIds.add(node.id, astNodeStableKey(cpg, node, twinOrdinals)))),
       ("label", ujson.Str(node.label)),
       ("order", number(node.order)),
       ("code", ujson.Str(node.code)),
@@ -277,13 +291,57 @@ object ArlExport {
     ujson.Obj.from(fields)
   }
 
-  private def methodStableKey(cpg: Cpg, method: Method): String =
-    s"METHOD:${method.fullName}@${stableFilename(cpg, method.filename)}"
+  private def methodTwinOrdinals(cpg: Cpg, methods: List[Method]): Map[Long, Int] =
+    methods
+      .groupBy(method => (method.fullName, stableFilename(cpg, method.filename)))
+      .toList
+      .filter(_._2.size > 1)
+      .sortBy(_._1)
+      .flatMap { case (_, twins) =>
+        val positioned = twins.map { method =>
+          val position = for {
+            line   <- method.lineNumber
+            column <- method.columnNumber
+          } yield line -> column
+          method -> position
+        }
+        val missingPositions = positioned.collect { case (method, None) => method }
+        if (missingPositions.nonEmpty) {
+          val names = missingPositions.map(describeMethod).sorted.mkString(", ")
+          throw new IllegalStateException(s"Twin methods are missing a line or column position: $names")
+        }
+
+        val ordered = positioned
+          .collect { case (method, Some((line, column))) => (method, line, column) }
+          .sortBy { case (_, line, column) => (line, column) }
+        val duplicatePositions = ordered
+          .groupBy { case (_, line, column) => (line, column) }
+          .collect {
+            case ((line, column), samePosition) if samePosition.size > 1 =>
+              s"($line, $column): ${samePosition.map(_._1).map(describeMethod).sorted.mkString(", ")}"
+          }
+          .toList
+          .sorted
+        if (duplicatePositions.nonEmpty) {
+          throw new IllegalStateException(s"Twin methods share source positions: ${duplicatePositions.mkString("; ")}")
+        }
+
+        ordered.zipWithIndex.map { case ((method, _, _), ordinal) => method.id -> ordinal }
+      }
+      .toMap
+
+  private def describeMethod(method: Method): String =
+    s"${method.fullName}@${method.filename} (id=${method.id})"
+
+  private def methodStableKey(cpg: Cpg, method: Method, twinOrdinals: Map[Long, Int]): String = {
+    val base = s"METHOD:${method.fullName}@${stableFilename(cpg, method.filename)}"
+    twinOrdinals.get(method.id).fold(base)(ordinal => s"$base#$ordinal")
+  }
 
   private def typeDeclStableKey(cpg: Cpg, typeDecl: TypeDecl): String =
     s"TYPE_DECL:${typeDecl.fullName}@${stableFilename(cpg, typeDecl.filename)}"
 
-  private def astNodeStableKey(cpg: Cpg, node: AstNode): String = {
+  private def astNodeStableKey(cpg: Cpg, node: AstNode, twinOrdinals: Map[Long, Int]): String = {
     var current: AstNode = node
     var path             = List.empty[AstNode]
     var enclosingMethod  = Option.empty[Method]
@@ -296,7 +354,7 @@ object ArlExport {
       }
     }
     val method = enclosingMethod.get
-    val key    = methodStableKey(cpg, method) + path.map(child => s"/${child.label}:${child.order}").mkString
+    val key = methodStableKey(cpg, method, twinOrdinals) + path.map(child => s"/${child.label}:${child.order}").mkString
     path.foreach { child =>
       val siblings = child.astParent.astChildren.l
         .filter(sibling => sibling.label == child.label && sibling.order == child.order)

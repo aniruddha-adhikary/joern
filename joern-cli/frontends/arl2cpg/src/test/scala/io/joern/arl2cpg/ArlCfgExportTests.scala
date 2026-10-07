@@ -427,7 +427,19 @@ class ArlCfgExportTests extends Arl2CpgSuite() {
         exportedUnknown.shouldBe(unknown.map(_.fullName).sorted)
         val methodKeyOrder = root("methods").arr.head.obj.keys.toList
         methodKeyOrder.shouldBe(
-          List("id", "stableId", "name", "fullName", "signature", "filename", "line", "lineEnd", "arlKind", "nodes")
+          List(
+            "id",
+            "stableId",
+            "stableKey",
+            "name",
+            "fullName",
+            "signature",
+            "filename",
+            "line",
+            "lineEnd",
+            "arlKind",
+            "nodes"
+          )
         )
         val methodSortKeys = root("methods").arr.map(method => (method("fullName").str, method("id").num.toLong)).toList
         methodSortKeys.shouldBe(methodSortKeys.sorted)
