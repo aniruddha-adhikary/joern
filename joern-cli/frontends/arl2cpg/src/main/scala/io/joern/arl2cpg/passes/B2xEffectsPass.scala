@@ -4,6 +4,8 @@ import io.joern.x2cpg.frontendspecific.arl2cpg.ArlFindings
 import io.joern.x2cpg.frontendspecific.arl2cpg.ArlFindings.{Codes, Reasons}
 import io.joern.arl2cpg.ArlAnnotations
 import io.joern.arl2cpg.b2x.{B2xEffects, B2xMember, B2xModel}
+import io.joern.arl2cpg.bom.BomModel
+import io.joern.arl2cpg.passes.resolution.TypeModel
 import io.joern.x2cpg.frontendspecific.arl2cpg.ArlTags
 import io.joern.x2cpg.Defines
 import io.shiftleft.codepropertygraph.generated.nodes.*
@@ -26,19 +28,37 @@ import scala.collection.mutable
   * `Lowering.b2xEffects` / `candidates` / `emitB2xEffects`.
   *
   * ARL only *calls* B2X/XOM methods; their bodies live elsewhere. For every dynamic call on ruleset data:
-  *   - if the mapping holds exactly one ARL body for (receiver class chain, name, arity), a METHOD node is created for
-  *     that body (`filename` = the b2x file), the CALL gets a CALL edge to it and an `ARL_RESOLVES_TO` tag, and each
-  *     field the body touches on `this` becomes an `ARL_WRITES` / `ARL_WRITES_INFERRED` / `ARL_READS` /
-  *     `ARL_READS_INFERRED` tag on the CALL, path rewritten to the call's receiver;
+  *   - if the mapping holds exactly one ARL body for (receiver class chain, name, arity), the CALL points to a METHOD
+  *     with its standard full name (reusing an existing XOM/Java METHOD when present), and each field the body touches
+  *     on `this` becomes an `ARL_WRITES` / `ARL_WRITES_INFERRED` / `ARL_READS` / `ARL_READS_INFERRED` tag on the CALL,
+  *     path rewritten to the call's receiver;
   *   - whatever remains unresolved — no mapping at all, an unknown receiver type, a class or method the mapping lacks,
   *     an overload the call site cannot disambiguate, a body that does not parse, or a body that itself calls compiled
   *     Java — is an `ARL_MAY_AFFECT` tag on the CALL carrying the reason plus a FINDING (`unresolved-call-effects`).
   *
   * Nothing is ever dropped: a call that cannot be understood says so, in machine-readable form, on the call itself.
   */
-class B2xEffectsPass(cpg: Cpg, b2x: Option[B2xModel]) extends CpgPass(cpg) {
+class B2xEffectsPass(
+  cpg: Cpg,
+  b2x: Option[B2xModel],
+  xomClasspath: Seq[String] = Seq.empty,
+  bom: BomModel = BomModel.empty
+) extends CpgPass(cpg) {
 
-  private val bodyMethods: mutable.Map[String, NewMethod] = mutable.Map.empty
+  private final case class ReturnTypeDecision(value: String, source: String)
+  private final case class BodyMethodDecision(
+    fullName: String,
+    signature: String,
+    target: Either[Method, NewMethod],
+    shadowedMethodFile: Option[String]
+  )
+
+  private val bodyMethods: mutable.Map[String, BodyMethodDecision]     = mutable.Map.empty
+  private val bodyReturnTypes: mutable.Map[String, ReturnTypeDecision] = mutable.Map.empty
+
+  private lazy val typeModel =
+    new TypeModel(cpg.typeDecl.isExternal(false).filenameNot(".*\\.arl$").l, xomClasspath, bom)
+  private lazy val methodsByFullName: Map[String, Method] = cpg.method.l.map(method => method.fullName -> method).toMap
 
   override def run(builder: DiffGraphBuilder): Unit = {
     b2x.foreach(model => reportUnhandled(builder, model))
@@ -131,63 +151,141 @@ class B2xEffectsPass(cpg: Cpg, b2x: Option[B2xModel]) extends CpgPass(cpg) {
     effects: B2xEffects,
     model: B2xModel
   ): Unit = {
-    val method = bodyMethod(builder, member, model)
-    builder.addEdge(call, method, EdgeTypes.CALL)
+    val returnType = bodyReturnType(member)
+    val method     = bodyMethod(builder, member, model, returnType)
+    method.target match {
+      case Left(existing)   => builder.addEdge(call, existing, EdgeTypes.CALL)
+      case Right(generated) => builder.addEdge(call, generated, EdgeTypes.CALL)
+    }
     builder.setNodeProperty(call, PropertyNames.MethodFullName, method.fullName)
+    builder.setNodeProperty(call, PropertyNames.Signature, method.signature)
+    if (returnType.value != Defines.Any) {
+      builder.setNodeProperty(call, PropertyNames.TypeFullName, returnType.value)
+    }
     ArlTags.tag(builder, call, ArlTags.ResolvesTo, method.fullName)
     effects.writes.foreach(w => ArlTags.tag(builder, call, ArlTags.Writes, s"$receiverPath.$w"))
     effects.inferredWrites.foreach(w => ArlTags.tag(builder, call, ArlTags.WritesInferred, s"$receiverPath.$w"))
     effects.reads.foreach(r => ArlTags.tag(builder, call, ArlTags.Reads, s"$receiverPath.$r"))
     effects.inferredReads.foreach(r => ArlTags.tag(builder, call, ArlTags.ReadsInferred, s"$receiverPath.$r"))
+    val additionalKeyValues = List(
+      ArlFindings.Keys.CallId -> call.id().toString,
+      "b2xFile"               -> model.path,
+      "b2xMember"             -> method.fullName,
+      "returnTypeSource"      -> returnType.source
+    )
+    ArlFindings.finding(
+      builder,
+      Some(call),
+      Codes.B2xMember,
+      Codes.B2xMember,
+      s"Call is bound to B2X member ${member.key}",
+      call.file.name.headOption.getOrElse(""),
+      call.lineNumber,
+      additionalKeyValues
+    )
+    if (returnType.source == "none") {
+      ArlFindings.finding(
+        builder,
+        Some(call),
+        Codes.B2xReturnTypeUnknown,
+        Codes.B2xReturnTypeUnknown,
+        s"Return type is unavailable for B2X member ${member.key}",
+        call.file.name.headOption.getOrElse(""),
+        call.lineNumber,
+        additionalKeyValues
+      )
+    }
+    method.shadowedMethodFile.foreach { shadowedMethodFile =>
+      ArlFindings.finding(
+        builder,
+        Some(call),
+        Codes.B2xShadowsMethod,
+        Codes.B2xShadowsMethod,
+        "The B2X body replaces the Java method at runtime, while the CALL edge points to the Java METHOD whose body is not the one executed.",
+        call.file.name.headOption.getOrElse(""),
+        call.lineNumber,
+        additionalKeyValues :+ ("shadowedMethodFile" -> shadowedMethodFile)
+      )
+    }
   }
 
-  /** One METHOD per B2X body, whatever the number of call sites that resolve to it. */
-  private def bodyMethod(builder: DiffGraphBuilder, member: B2xMember, model: B2xModel): NewMethod =
+  /** One target per B2X body, whatever the number of call sites that resolve to it. */
+  private def bodyMethod(
+    builder: DiffGraphBuilder,
+    member: B2xMember,
+    model: B2xModel,
+    returnType: ReturnTypeDecision
+  ): BodyMethodDecision =
     bodyMethods.getOrElseUpdate(
       member.key, {
-        val signature = s"${member.paramTypes.mkString(",")}"
-        val method    = NewMethod()
-          .name(member.name)
-          .fullName(B2xEffectsPass.bodyFullName(member))
-          .signature(signature)
-          .code(member.body)
-          .filename(model.path)
-          .astParentType(NodeTypes.TYPE_DECL)
-          .astParentFullName(member.businessClass)
-          .isExternal(false)
-        val thisParam = NewMethodParameterIn()
-          .name("this")
-          .code("this")
-          .index(0)
-          .order(0)
-          .typeFullName(member.businessClass)
-          .evaluationStrategy(EvaluationStrategies.BY_REFERENCE)
-        val params = member.paramTypes.zipWithIndex.map { case (tpe, i) =>
-          NewMethodParameterIn()
-            .name(s"p${i + 1}")
-            .code(tpe)
-            .index(i + 1)
-            .order(i + 1)
-            .typeFullName(tpe)
-            .evaluationStrategy(EvaluationStrategies.BY_SHARING)
+        val fullName = B2xEffectsPass.bodyFullName(member, returnType.value)
+        methodsByFullName.get(fullName) match {
+          case Some(existing) =>
+            BodyMethodDecision(existing.fullName, existing.signature, Left(existing), Some(existing.filename))
+          case None =>
+            val signature = B2xEffectsPass.signature(member, returnType.value)
+            val method    = NewMethod()
+              .name(member.name)
+              .fullName(fullName)
+              .signature(signature)
+              .code(member.body)
+              .filename(model.path)
+              .astParentType(NodeTypes.TYPE_DECL)
+              .astParentFullName(member.businessClass)
+              .isExternal(false)
+            val thisParam = NewMethodParameterIn()
+              .name("this")
+              .code("this")
+              .index(0)
+              .order(0)
+              .typeFullName(member.businessClass)
+              .evaluationStrategy(EvaluationStrategies.BY_REFERENCE)
+            val params = member.paramTypes.zipWithIndex.map { case (tpe, i) =>
+              NewMethodParameterIn()
+                .name(s"p${i + 1}")
+                .code(tpe)
+                .index(i + 1)
+                .order(i + 1)
+                .typeFullName(tpe)
+                .evaluationStrategy(EvaluationStrategies.BY_SHARING)
+            }
+            val block = NewBlock().code(member.body).typeFullName(Defines.Any).order(params.size + 1)
+            val ret   = NewMethodReturn()
+              .code("RET")
+              .typeFullName(returnType.value)
+              .evaluationStrategy(EvaluationStrategies.BY_VALUE)
+              .order(params.size + 3)
+            builder.addNode(method)
+            (thisParam :: params).foreach { p =>
+              builder.addNode(p)
+              builder.addEdge(method, p, EdgeTypes.AST)
+            }
+            builder.addNode(block)
+            builder.addEdge(method, block, EdgeTypes.AST)
+            ArlAnnotations.addValue(builder, method, "arlKind", "function", params.size + 2)
+            builder.addNode(ret)
+            builder.addEdge(method, ret, EdgeTypes.AST)
+            BodyMethodDecision(method.fullName, method.signature, Right(method), None)
         }
-        val block = NewBlock().code(member.body).typeFullName(Defines.Any).order(params.size + 1)
-        val ret   = NewMethodReturn()
-          .code("RET")
-          .typeFullName(Defines.Any)
-          .evaluationStrategy(EvaluationStrategies.BY_VALUE)
-          .order(params.size + 3)
-        builder.addNode(method)
-        (thisParam :: params).foreach { p =>
-          builder.addNode(p)
-          builder.addEdge(method, p, EdgeTypes.AST)
-        }
-        builder.addNode(block)
-        builder.addEdge(method, block, EdgeTypes.AST)
-        ArlAnnotations.addValue(builder, method, "arlKind", "function", params.size + 2)
-        builder.addNode(ret)
-        builder.addEdge(method, ret, EdgeTypes.AST)
-        method
+      }
+    )
+
+  private def bodyReturnType(member: B2xMember): ReturnTypeDecision =
+    bodyReturnTypes.getOrElseUpdate(
+      member.key,
+      member.returnType match {
+        case Some(value) => ReturnTypeDecision(value, "b2x")
+        case None        =>
+          val matchingMethods =
+            typeModel.methodsFor(member.businessClass, member.name).filter(_.paramTypes == member.paramTypes)
+          matchingMethods.map(_.returnType).distinct match {
+            case returnType :: Nil =>
+              val source =
+                if (matchingMethods.exists(method => method.returnType == returnType && method.bom.isDefined)) "bom"
+                else "xom"
+              ReturnTypeDecision(returnType, source)
+            case _ => ReturnTypeDecision(Defines.Any, "none")
+          }
       }
     )
 
@@ -207,7 +305,9 @@ class B2xEffectsPass(cpg: Cpg, b2x: Option[B2xModel]) extends CpgPass(cpg) {
 
 object B2xEffectsPass {
 
-  /** `com.acme.Outcome.rejectWith:b2x(com.acme.Reason,int)` — the fullName of the METHOD standing for a B2X body. */
-  def bodyFullName(member: B2xMember): String =
-    s"${member.businessClass}.${member.name}:b2x(${member.paramTypes.mkString(",")})"
+  def bodyFullName(member: B2xMember, returnType: String): String =
+    s"${member.businessClass}.${member.name}:$returnType(${member.paramTypes.mkString(",")})"
+
+  def signature(member: B2xMember, returnType: String): String =
+    s"$returnType(${member.paramTypes.mkString(",")})"
 }
